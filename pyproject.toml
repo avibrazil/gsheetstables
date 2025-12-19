@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gsheetstables"
+authors = [
+  { name="Avi Alkalay", email="avi@unix.sh" },
+]
+description = "Access the Tables of your Google Sheets as Pandas Dataframes and write them to a database"
+readme = "README.md"
+requires-python = ">=3.7"
+dependencies = ["Unidecode","dotmap","pandas","google-auth-oauthlib","google-api-python-client"]
+classifiers = [
+        "Programming Language :: Python :: 3",
+        "Operating System :: OS Independent",
+        "Development Status :: 5 - Production/Stable",
+        "Environment :: MacOS X",
+        "Environment :: Win32 (MS Windows)",
+        "Environment :: Console",
+        "Intended Audience :: System Administrators",
+        "Intended Audience :: End Users/Desktop",
+        "License :: OSI Approved :: GNU Library or Lesser General Public License (LGPL)",
+        "Operating System :: MacOS",
+        "Operating System :: Microsoft :: Windows",
+        "Operating System :: POSIX",
+        "Operating System :: Unix",
+        "Topic :: System :: Archiving :: Backup",
+        "Topic :: System :: Recovery Tools"
+]
+dynamic = ["version"]
+
+[tool.setuptools.dynamic]
+version = {attr = "gsheetstables.__version__"}
+
+[project.scripts]
+gsheetstables2db = "gsheetstables.__main__:main"
+
+[project.urls]
+"Homepage" = "https://github.com/avibrazil/autorsync"
+Source = "https://github.com/avibrazil/autorsync"
+Issues = "https://github.com/avibrazil/autorsync/issues/new/choose"
+Pypi = "https://pypi.org/project/auto-remote-sync"
