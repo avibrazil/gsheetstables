@@ -1,6 +1,10 @@
 # Google Sheets Tables extraction
 
-Retrieve Tables from a Google Spreadsheet and make them available as Pandas Dataframes.
+Use Google Spreadsheet Tables (only Tables) as Pandas Dataframes or save them to a SQL database.
+
+```shell
+pip install gsheetstables
+```
 
 ## Command Line tool
 
