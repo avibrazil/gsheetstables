@@ -10,7 +10,7 @@ import pandas
 import google.oauth2.service_account
 import googleapiclient.discovery
 
-__version__="1.0"
+__version__="1.0.1"
 
 
 class GSheetsTables():

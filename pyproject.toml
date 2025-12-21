@@ -10,7 +10,7 @@ authors = [
 description = "Access the Tables of your Google Sheets as Pandas Dataframes and write them to a database"
 readme = "README.md"
 requires-python = ">=3.7"
-dependencies = ["Unidecode","dotmap","pandas","google-auth-oauthlib","google-api-python-client"]
+dependencies = ["Unidecode","dotmap","pandas","google-auth-oauthlib","google-api-python-client","Jinja2","SQLAlchemy"]
 classifiers = [
         "Programming Language :: Python :: 3",
         "Operating System :: OS Independent",
