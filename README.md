@@ -25,9 +25,10 @@ gsheetstables2db -s 1zYR...tT8 \
     --sql-split-char § \
     --sql-post "{% for table in tables %}create index if not exists idx_snapshot_{{table}} on {{table}} (_GSheetsTables_utc_timestamp) § {% endfor %}"
 ```
-Keep up to 6 snapshots of each table (after running it multiple times) and save a column with the row numbers that users see in GSpread:
+Prepend “`mysheet_`” to all table names in DB, keep up to 6 snapshots of each table (after running it multiple times) and save a column with the row numbers that users see in GSpread:
 ```shell
 gsheetstables2db -s 1zYR...tT8 \
+    --table-prefix mysheet_
     --append \
     --keep-snapshots 6 \
     --row-numbers

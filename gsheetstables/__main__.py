@@ -62,6 +62,14 @@ def prepare_args():
     )
 
     parser.add_argument(
+        '-p', '--table-prefix',
+        dest='table_prefix',
+        required=False,
+        default='',
+        help='Prefix this string to every table name in the target database'
+    )
+
+    parser.add_argument(
         '-i', '--identity_file',
         dest='service_account_file',
         required=False,
@@ -271,7 +279,7 @@ def main():
                 )
 
                 .to_sql(
-                    table,
+                    args.table_prefix + table,
                     if_exists=("append" if args.append else "replace"),
                     con=db_connection,
                     index=args.rows
@@ -281,10 +289,10 @@ def main():
             if args.append and args.nsnapshots>0:
                 db_connection.execute(sqlalchemy.text(textwrap.dedent(f"""\
                     DELETE
-                    FROM {table}
+                    FROM {args.table_prefix}{table}
                     WHERE _GSheetsTables_utc_timestamp NOT IN (
                         SELECT DISTINCT _GSheetsTables_utc_timestamp
-                        FROM {table}
+                        FROM {args.table_prefix}{table}
                         ORDER BY _GSheetsTables_utc_timestamp DESC limit {args.nsnapshots}
                     )"""))
                 )
