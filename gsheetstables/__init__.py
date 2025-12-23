@@ -10,11 +10,11 @@ import pandas
 import google.oauth2.service_account
 import googleapiclient.discovery
 
-__version__="1.1"
+__version__="1.2"
 
 
 class GSheetsTables():
-    def __init__(self, gsheetid, service_account_file, column_rename_map=None, slugify=True):
+    def __init__(self, gsheetid, service_account=None, private_key=None, service_account_file=None, column_rename_map=None, slugify=True):
         # Setup logging
         self.logger = logging.getLogger(__name__ + '.' + self.__class__.__name__)
 
@@ -25,17 +25,40 @@ class GSheetsTables():
         self._tables = dict()
         self._table_properties = dict()
 
+        scopes=["https://www.googleapis.com/auth/spreadsheets.readonly"]
+
+        if service_account_file:
+            credentials = (
+                google.oauth2.service_account
+                .Credentials.from_service_account_file(
+                    service_account_file,
+                    scopes=scopes
+                )
+            )
+        else:
+            if service_account is not None and private_key is not None:
+                """
+                service_account is an e-mail address.
+                private_key is a PKCS8 PEM-encoded private key (including "BEGIN PRIVATE KEY")
+                """
+                credentials = (
+                    google.oauth2.service_account
+                    .Credentials.from_service_account_info(
+                        dict(
+                            private_key    = private_key,
+                            client_email   = service_account,
+                            token_uri      = "https://oauth2.googleapis.com/token"
+                        )
+                    )
+                )
+            else:
+                raise ValueError("Attributes service_account AND private_key must be passed to constructor if service_account_file is not passed.")
+
         self.GoogleSheets = (
             googleapiclient.discovery.build(
                 "sheets",
                 "v4",
-                credentials = (
-                    google.oauth2.service_account
-                    .Credentials.from_service_account_file(
-                        service_account_file,
-                        scopes=["https://www.googleapis.com/auth/spreadsheets.readonly"]
-                    )
-                )
+                credentials = credentials
             )
             .spreadsheets()
         )

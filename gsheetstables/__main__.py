@@ -4,15 +4,22 @@
 # import sys
 # sys.path.insert(0,'..')
 
+import sys
+import os
 import datetime
 import textwrap
 import argparse
 import pathlib
 import logging
+import base64
+import json
+
+import cryptography.hazmat.primitives.serialization
 import sqlalchemy
 import jinja2
 import gsheetstables
 
+default_identity_file = pathlib.Path.home() / 'service_account.json'
 
 def prepare_logging(verbose: int):
     level = logging.WARNING
@@ -70,11 +77,27 @@ def prepare_args():
     )
 
     parser.add_argument(
-        '-i', '--identity_file',
+        '-i', '--identity-file',
         dest='service_account_file',
         required=False,
-        default=pathlib.Path.home() / 'service_account.json',
-        help='Path to JSON file that contains the private key of account authorized to access the spreadsheet. Download it from Google Cloud Console.'
+        default=None,
+        help=f'Path to JSON file that contains the private key of account authorized to access the spreadsheet. Download it from Google Cloud Console. Defaults to {default_identity_file}'
+    )
+
+    parser.add_argument(
+        '-c', '--service-account',
+        dest='service_account',
+        required=False,
+        default=None,
+        help='E-mail address of service account as created in Google Cloud Console'
+    )
+
+    parser.add_argument(
+        '-m', '--service-account-private-key',
+        dest='service_account_private_key',
+        required=False,
+        default=None,
+        help='Encoded and encrypted private key. Run me with --identity-file and -vv to see what to pass.'
     )
 
     parser.add_argument(
@@ -223,6 +246,44 @@ def get_db(db_url):
     )
 
 
+def encode_identity(identity_file, logger):
+    i=json.load(open(identity_file))
+
+    enc=cryptography.hazmat.primitives.serialization.BestAvailableEncryption(os.getenv('USER').encode())
+
+    k=cryptography.hazmat.primitives.serialization.load_pem_private_key(
+        i['private_key'].encode(),
+        password=None
+    )
+
+    payload=base64.b64encode(
+        k.private_bytes(
+            encoding             = cryptography.hazmat.primitives.serialization.Encoding.DER,
+            format               = cryptography.hazmat.primitives.serialization.PrivateFormat.PKCS8,
+            encryption_algorithm = enc
+        )
+    ).decode()
+
+    logger.debug(
+        f"""Next time pass the following in the command line to avoid the {identity_file} identity file:""" +
+        f"""--service-account {i['client_email']} --service-account-private-key {payload}"""
+    )
+
+
+def decode_identity(payload):
+    return (
+        cryptography.hazmat.primitives.serialization.load_der_private_key(
+            base64.b64decode(payload),
+            password=os.getenv('USER').encode()
+        )
+        .private_bytes(
+            encoding              = cryptography.hazmat.primitives.serialization.Encoding.PEM,
+            format                = cryptography.hazmat.primitives.serialization.PrivateFormat.PKCS8,
+            encryption_algorithm  = cryptography.hazmat.primitives.serialization.NoEncryption()
+        )
+        .decode()
+    )
+
 
 def main():
     # Read environment and command line parameters
@@ -235,11 +296,28 @@ def main():
     global logger
     logger=prepare_logging(args.verbose)
 
-    tables = gsheetstables.GSheetsTables(
-        gsheetid             = args.gsheet,
-        service_account_file = args.service_account_file,
-        slugify              = args.slugify,
-    )
+    # Check how we are going to authenticate with Google
+    if args.service_account is not None and args.service_account_private_key is not None:
+        tables = gsheetstables.GSheetsTables(
+            gsheetid             = args.gsheet,
+            service_account      = args.service_account,
+            private_key          = decode_identity(args.service_account_private_key),
+            slugify              = args.slugify,
+        )
+    elif args.service_account_file is not None or default_identity_file.exists():
+        identity=(args.service_account_file if args.service_account_file else default_identity_file)
+
+        if args.verbose>=2:
+            encode_identity(identity, logger)
+
+        tables = gsheetstables.GSheetsTables(
+            gsheetid             = args.gsheet,
+            service_account_file = identity,
+            slugify              = args.slugify,
+        )
+    else:
+        logger.error("Either pass an identity file with -i or pure identity with -c and -m. Aborting.")
+        sys.exit(1)
 
     db = get_db(args.db_url)
 
