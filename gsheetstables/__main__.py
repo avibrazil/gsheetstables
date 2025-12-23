@@ -366,13 +366,18 @@ def main():
 
             if args.append and args.nsnapshots>0:
                 db_connection.execute(sqlalchemy.text(textwrap.dedent(f"""\
-                    DELETE
-                    FROM {args.table_prefix}{table}
-                    WHERE _GSheetsTables_utc_timestamp NOT IN (
-                        SELECT DISTINCT _GSheetsTables_utc_timestamp
+                    DELETE t
+                    FROM {args.table_prefix}{table} AS t
+                    LEFT JOIN (
+                        SELECT _GSheetsTables_utc_timestamp
                         FROM {args.table_prefix}{table}
-                        ORDER BY _GSheetsTables_utc_timestamp DESC limit {args.nsnapshots}
-                    )"""))
+                        GROUP BY _GSheetsTables_utc_timestamp
+                        ORDER BY _GSheetsTables_utc_timestamp DESC
+                        LIMIT {args.nsnapshots}
+                    ) AS keep
+                    ON keep._GSheetsTables_utc_timestamp = t._GSheetsTables_utc_timestamp
+                    WHERE keep._GSheetsTables_utc_timestamp IS NULL
+                    """))
                 )
 
 
