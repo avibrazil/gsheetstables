@@ -9,8 +9,9 @@ import dotmap
 import pandas
 import google.oauth2.service_account
 import googleapiclient.discovery
+import googleapiclient.errors
 
-__version__="1.2"
+__version__="1.4"
 
 
 class GSheetsTables():
@@ -22,10 +23,15 @@ class GSheetsTables():
         self.column_rename_map=column_rename_map
         self.slugify=slugify
 
+        self.modification_time=None
+
         self._tables = dict()
         self._table_properties = dict()
 
-        scopes=["https://www.googleapis.com/auth/spreadsheets.readonly"]
+        scopes=[
+            "https://www.googleapis.com/auth/spreadsheets.readonly",
+            "https://www.googleapis.com/auth/drive.metadata.readonly"
+        ]
 
         if service_account_file:
             credentials = (
@@ -39,7 +45,8 @@ class GSheetsTables():
             if service_account is not None and private_key is not None:
                 """
                 service_account is an e-mail address.
-                private_key is a PKCS8 PEM-encoded private key (including "BEGIN PRIVATE KEY")
+                private_key is a PKCS8 PEM-encoded private key (including
+                "BEGIN PRIVATE KEY")
                 """
                 credentials = (
                     google.oauth2.service_account
@@ -53,6 +60,15 @@ class GSheetsTables():
                 )
             else:
                 raise ValueError("Attributes service_account AND private_key must be passed to constructor if service_account_file is not passed.")
+
+        self.GoogleDrive = (
+            googleapiclient.discovery.build(
+                "drive",
+                "v3",
+                credentials = credentials
+            )
+            .files()
+        )
 
         self.GoogleSheets = (
             googleapiclient.discovery.build(
@@ -83,6 +99,21 @@ class GSheetsTables():
 
     def get_tables(self):
         self._t=list()
+
+        try:
+            self.modification_time = datetime.datetime.fromisoformat(
+                self.GoogleDrive
+                .get(
+                    fileId=self.gsheetid,
+                    fields="modifiedTime"
+                )
+                .execute()
+                ["modifiedTime"]
+            )
+
+            self.logger.info(f"Spreadsheet last modification time is {self.modification_time}")
+        except googleapiclient.errors.HttpError:
+            self.logger.warning("Google Drive API seems disabled, spreadsheet modification time won’t be available. Enable at https://console.cloud.google.com/apis/api/drive.googleapis.com/")
 
         spreadsheet = dotmap.DotMap(
             self.GoogleSheets
@@ -176,6 +207,13 @@ class GSheetsTables():
                         )
                     except Exception:
                         self.logger.exception(f"Sheet «{self._t[i].sheet}», table «{self._t[i].name}», column «{c.columnName}» has invalid date and time data")
+                        raise
+
+                if str(c.columnType) in {'CURRENCY', 'DOUBLE', 'PERCENT'}:
+                    try:
+                        self._t[i].data[c.columnName] = pandas.to_numeric(self._t[i].data[c.columnName])
+                    except Exception:
+                        self.logger.exception(f"Sheet «{self._t[i].sheet}», table «{self._t[i].name}», column «{c.columnName}» has invalid numeric data")
                         raise
 
             renamer=dict()

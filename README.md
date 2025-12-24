@@ -189,9 +189,9 @@ This Python module closes the gap of bringing all that nice and structured human
 
 1. Go to https://console.cloud.google.com/projectcreate, make sure you are under correct Google account and create a project named **My Project** (or reuse a previously existing project)
 1. On same page, **edit the Project ID to make it smaller and more meanigfull** (or leave defaults); this will be part of an e-mail address that we’ll use later
-1. Go to https://console.cloud.google.com/apis/library/sheets.googleapis.com and **activate the API**
+1. **Activate** [Sheets API](https://console.cloud.google.com/apis/library/sheets.googleapis.com) and [Drive API](https://console.cloud.google.com/apis/library/drive.googleapis.com) (Drive is optional, just to get file modification time)
 1. Go to https://console.cloud.google.com/apis/credentials, make sure you are in the correct project and select **Create Credentials → Service account**. This is like creating an operator user that will access your Google Spreadsheet; and as a user, it has an e-mail address that appears on the screen. Copy this e-mail address.
-1. After service account created, go into its details and **create a keypair** (or upload the public part of an existing one).
+1. After service account created, go into its details and **create a keypair** (or upload the public part of an existing keypair).
 1. **Download the JSON file** generated for this keypair, it contains the private part of the key, required to identify the program as your service account.
 1. Go to the Google Sheet your program needs to extract tables, **hit Share button** on top right and **add the virtual e-mail address** of the service account you just created and copied. This is an e-mail address that looks like 
 _operator-one@my-project.iam.gserviceaccount.com_

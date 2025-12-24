@@ -17,6 +17,7 @@ import json
 import cryptography.hazmat.primitives.serialization
 import sqlalchemy
 import jinja2
+import pandas
 import gsheetstables
 
 default_identity_file = pathlib.Path.home() / 'service_account.json'
@@ -123,8 +124,8 @@ def prepare_args():
         dest='timestamp',
         action=argparse.BooleanOptionalAction,
         required=False,
-        default=False,
-        help='Write the UTC timestamp when this program runs as table column _GSheetsTables_utc_timestamp. Defaults to not write.'
+        default=True,
+        help='Write the UTC timestamp when this program runs as table column _GSheetsTables_utc_timestamp. Defaults to write timestamps.'
     )
 
     parser.add_argument(
@@ -343,8 +344,48 @@ def main():
             for s in script:
                 db_connection.execute(sqlalchemy.text(s))
 
+        if not args.timestamp:
+            logger.warning("Not tracking sync timestamps. Data writing to database might be excessive on repetitive runs of this program. Activate with --timestamp")
+
         now = datetime.datetime.now(datetime.timezone.utc)
         for table in tables.tables:
+
+            # Check if table in DB needs an update by comparing DB’s table
+            # timestamps and spreadsheet last modification time.
+            if tables.modification_time and args.timestamp:
+                versions_query = (
+                    sqlalchemy.text(
+                        textwrap.dedent(f"""\
+                            SELECT DISTINCT _GSheetsTables_utc_timestamp
+                            FROM {args.table_prefix}{table}
+                            WHERE _GSheetsTables_utc_timestamp >= :modification_time"""
+                        )
+                    )
+                    .bindparams(modification_time=tables.modification_time)
+                    .compile(
+                        dialect=db.dialect,
+                        compile_kwargs=dict(literal_binds=True)
+                    )
+                )
+
+                logger.debug(f"Checking if {table} requires update with query: {versions_query}")
+
+                try:
+                    versions = pandas.read_sql_query(versions_query, con=db_connection)
+                    if len(versions) > 0:
+                        # DB already has data with timestamp more recent than the
+                        # spreadsheet last modification time.
+
+                        logger.info(f"Table {table} doesn‘t need update in DB.")
+
+                        continue
+                    else:
+                        logger.info(f"Table {table} will get new data in DB.")
+
+                except sqlalchemy.exc.ProgrammingError:
+                    logger.warning(f"Can’t check if table {table} requires a DB update; seems it doesn’t exist in database, so creating anyway. You should worry if you see this warning again and again in the future.")
+
+
             (
                 tables.t(table)
 
@@ -365,6 +406,7 @@ def main():
             )
 
             if args.append and args.nsnapshots>0:
+                # Delete old data
                 db_connection.execute(sqlalchemy.text(textwrap.dedent(f"""\
                     DELETE t
                     FROM {args.table_prefix}{table} AS t
