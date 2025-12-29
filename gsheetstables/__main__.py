@@ -30,10 +30,9 @@ def prepare_logging(verbose: int):
         level = logging.DEBUG
 
     logging.basicConfig(
-        level=logging.INFO,  # default level
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        level=level,  # default level
+        # format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
-
 
     loggers=[
         logging.getLogger(__name__),
@@ -110,23 +109,23 @@ def prepare_args():
         help='Slugify, simplify column names to be more database-friendly. Defaults to slugify.'
     )
 
-    parser.add_argument(
-        '-r', '--row-numbers',
-        dest='rows',
-        action=argparse.BooleanOptionalAction,
-        required=False,
-        default=False,
-        help='Write the spreadsheet row number as table column _GSheet_row. Defaults to not write.'
-    )
+    # parser.add_argument(
+    #     '-r', '--row-numbers',
+    #     dest='rows',
+    #     action=argparse.BooleanOptionalAction,
+    #     required=False,
+    #     default=False,
+    #     help='Write the spreadsheet row number as table column _GSheet_row. Defaults to not write.'
+    # )
 
-    parser.add_argument(
-        '-t', '--timestamp',
-        dest='timestamp',
-        action=argparse.BooleanOptionalAction,
-        required=False,
-        default=True,
-        help='Write the UTC timestamp when this program runs as table column _GSheetsTables_utc_timestamp. Defaults to write timestamps.'
-    )
+    # parser.add_argument(
+    #     '-t', '--timestamp',
+    #     dest='timestamp',
+    #     action=argparse.BooleanOptionalAction,
+    #     required=False,
+    #     default=True,
+    #     help='Write the UTC timestamp when this program runs as table column _GSheetsTables_utc_timestamp. Defaults to write timestamps.'
+    # )
 
     parser.add_argument(
         '-a', '--append',
@@ -182,7 +181,7 @@ def prepare_args():
 
 
 # A simplified function inspired by https://github.com/avibrazil/investorzilla/blob/main/investorzilla/datacache.py
-def get_db(db_url):
+def get_db(db_url, echo=False):
     engine_config_sets=dict(
         # Documentation for all these SQLAlchemy pool control parameters:
         # https://docs.sqlalchemy.org/en/14/core/engines.html#engine-creation-api
@@ -200,7 +199,7 @@ def get_db(db_url):
             max_overflow      = 50,
 
             # Debug connection and all queries
-            # echo              = True
+            echo              = echo
         ),
         sqlite=dict(
             # SQLite doesn’t support concurrent writes, so we‘ll amend
@@ -290,9 +289,6 @@ def main():
     # Read environment and command line parameters
     args=prepare_args()
 
-    if args.append:
-        args.timestamp=True
-
     # Setup logging
     global logger
     logger=prepare_logging(args.verbose)
@@ -320,7 +316,7 @@ def main():
         logger.error("Either pass an identity file with -i or pure identity with -c and -m. Aborting.")
         sys.exit(1)
 
-    db = get_db(args.db_url)
+    db = get_db(args.db_url, args.verbose>0)
 
     with db.begin() as db_connection:
         # 1. Run sql_pre script
@@ -344,24 +340,23 @@ def main():
             for s in script:
                 db_connection.execute(sqlalchemy.text(s))
 
-        if not args.timestamp:
-            logger.warning("Not tracking sync timestamps. Data writing to database might be excessive on repetitive runs of this program. Activate with --timestamp")
-
         now = datetime.datetime.now(datetime.timezone.utc)
+
         for table in tables.tables:
 
             # Check if table in DB needs an update by comparing DB’s table
             # timestamps and spreadsheet last modification time.
-            if tables.modification_time and args.timestamp:
+            if tables.modification_time:
+
                 versions_query = (
                     sqlalchemy.text(
                         textwrap.dedent(f"""\
-                            SELECT DISTINCT _GSheetsTables_utc_timestamp
+                            SELECT DISTINCT _GSheet_utc_timestamp
                             FROM {args.table_prefix}{table}
-                            WHERE _GSheetsTables_utc_timestamp >= :modification_time"""
+                            WHERE _GSheet_utc_timestamp >= :modification_time"""
                         )
                     )
-                    .bindparams(modification_time=tables.modification_time)
+                    .bindparams(modification_time=tables.modification_time.replace(microsecond=0))
                     .compile(
                         dialect=db.dialect,
                         compile_kwargs=dict(literal_binds=True)
@@ -373,52 +368,126 @@ def main():
                 try:
                     versions = pandas.read_sql_query(versions_query, con=db_connection)
                     if len(versions) > 0:
-                        # DB already has data with timestamp more recent than the
-                        # spreadsheet last modification time.
+                        # DB already has data with timestamp equal or more
+                        # recent than the spreadsheet last modification time.
 
                         logger.info(f"Table {table} doesn‘t need update in DB.")
 
                         continue
                     else:
                         logger.info(f"Table {table} will get new data in DB.")
+                        table_exists=True
 
                 except sqlalchemy.exc.ProgrammingError:
+                    table_exists=False
                     logger.warning(f"Can’t check if table {table} requires a DB update; seems it doesn’t exist in database, so creating anyway. You should worry if you see this warning again and again in the future.")
 
 
+            final_table = args.table_prefix + table
+            target_table=f'__tmp_{final_table}' if table_exists else final_table
+
+            logger.debug(f"Write table data initially to {target_table}")
+
+            # Write DataFrame to DB, either as a temporary table suited for data
+            # comparison, or as the final table
             (
                 tables.t(table)
 
-                .pipe(
-                    lambda table: (
-                        table.assign(_GSheetsTables_utc_timestamp=now)
-                        if args.timestamp
-                        else table
-                    )
-                )
+                .assign(_GSheet_utc_timestamp=tables.modification_time.replace(microsecond=0))
 
                 .to_sql(
-                    args.table_prefix + table,
+                    target_table,
                     if_exists=("append" if args.append else "replace"),
                     con=db_connection,
-                    index=args.rows
+                    index=True
                 )
             )
 
+            # Check if data really changed
+            if table_exists:
+
+                logger.debug(f"Compare new data with last snapshot")
+
+                col_compare = ' OR '.join([
+                    f"current.`{c}` <> {target_table}.`{c}`"
+                    for c in tables.t(table).columns
+                    if c not in {'_GSheet_row'}
+                ])
+
+                # If the following query returns more than zero lines, table
+                # has changed and requires update.
+                # Query is a bit too complex to keep compatibility with all DBs,
+                # specially those that don’t support full outer join (MariaDB).
+                diff_query = textwrap.dedent(f"""\
+                    WITH current AS (
+                    	SELECT *
+                    	FROM {final_table}
+                    	WHERE _GSheet_utc_timestamp = (
+                            SELECT MAX(_GSheet_utc_timestamp)
+                            FROM {final_table}
+                        )
+                    ),
+                    diff_left AS (
+                    	SELECT current._GSheet_row
+                    	FROM current
+                    	LEFT JOIN {target_table}
+                    	ON current._GSheet_row = {target_table}._GSheet_row
+                    	WHERE {col_compare}
+                    	LIMIT 1
+                    ),
+                    diff_right AS (
+                    	SELECT {target_table}._GSheet_row
+                    	FROM current
+                    	RIGHT JOIN {target_table}
+                    	ON current._GSheet_row = {target_table}._GSheet_row
+                    	WHERE {col_compare}
+                    	LIMIT 1
+                    )
+                    SELECT *
+                    FROM diff_left
+                    UNION
+                    SELECT *
+                    FROM diff_right
+                """)
+
+                diff = pandas.read_sql_query(diff_query, con=db_connection)
+                if len(diff) > 0:
+                    # Data of this scpecific table has changed, append to main
+                    # table.
+
+                    logger.debug(f"Detected change in data; updating {final_table}")
+
+                    db_connection.execute(
+                        sqlalchemy.text(textwrap.dedent(f"""\
+                            INSERT INTO {final_table}
+                            SELECT * FROM {target_table}
+                        """))
+                    )
+                else:
+                    logger.debug(f"Data for table {final_table} didn't change; not updating")
+
+                logger.debug(f"Drop auxiliary table {target_table}")
+                db_connection.execute(
+                    sqlalchemy.text(textwrap.dedent(f"""\
+                        DROP TABLE {target_table}
+                    """))
+                )
+
+            # Delete old table snapshots, keep only args.nsnapshots
             if args.append and args.nsnapshots>0:
-                # Delete old data
+                logger.debug(f"Delete old snapshots")
                 db_connection.execute(sqlalchemy.text(textwrap.dedent(f"""\
                     DELETE t
-                    FROM {args.table_prefix}{table} AS t
+                    FROM {final_table} AS t
                     LEFT JOIN (
-                        SELECT _GSheetsTables_utc_timestamp
-                        FROM {args.table_prefix}{table}
-                        GROUP BY _GSheetsTables_utc_timestamp
-                        ORDER BY _GSheetsTables_utc_timestamp DESC
+                        SELECT _GSheet_utc_timestamp
+                        FROM {final_table}
+                        GROUP BY _GSheet_utc_timestamp
+                        ORDER BY _GSheet_utc_timestamp DESC
                         LIMIT {args.nsnapshots}
                     ) AS keep
-                    ON keep._GSheetsTables_utc_timestamp = t._GSheetsTables_utc_timestamp
-                    WHERE keep._GSheetsTables_utc_timestamp IS NULL
+                    ON keep._GSheet_utc_timestamp = t._GSheet_utc_timestamp
+                    WHERE keep._GSheet_utc_timestamp IS NULL
                     """))
                 )
 

@@ -22,9 +22,11 @@ from GSheet `1zYR...tT8`.
 Execute some SQL queries after (or before, with `--sql-pre`) the tables were loaded/created:
 ```shell
 gsheetstables2db -s 1zYR...tT8 \
+    --table-prefix _raw_tables_ \
     --sql-split-char § \
-    --sql-post "{% for table in tables %}create index if not exists idx_snapshot_{{table}} on {{table}} (_GSheetsTables_utc_timestamp) § {% endfor %}"
+    --sql-post "{% for table in tables %}create index if not exists idx_snapshot_{{table}} on _raw_tables_{{table}} (_GSheet_utc_timestamp) § create view if not exists {{table}} as select * from _raw_tables_{{table}} where _GSheet_utc_timestamp=(select max(_GSheet_utc_timestamp) from _raw_tables_{{table}}) § {% endfor %}"
 ```
+
 Prepend “`mysheet_`” to all table names in DB, keep up to 6 snapshots of each table (after running it multiple times) and save a column with the row numbers that users see in GSpread:
 ```shell
 gsheetstables2db -s 1zYR...tT8 \
