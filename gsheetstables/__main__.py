@@ -320,9 +320,13 @@ def main():
 
     with db.begin() as db_connection:
         # 1. Run sql_pre script
-        # 2. Write data to DB
-        # 3. Cleanup old data from tables, in case of appending
-        # 4. Run sql_post script
+        # 2. Check if spreadhseet time is more recent than table snapshot in DB
+        # 3. Write data to auxiliary table
+        # 4. Compare last official snapshot with new data on auxiliary table
+        # 5. Append auxiliary table into target table with new timestamp
+        # 6. Drop auxiliary table
+        # 7. Cleanup old data from tables, in case of appending
+        # 8. Run sql_post script
 
         if args.sql_pre:
             meta_script = jinja2.Template(args.sql_pre)
@@ -432,7 +436,7 @@ def main():
                     	FROM current
                     	LEFT JOIN {target_table}
                     	ON current._GSheet_row = {target_table}._GSheet_row
-                    	WHERE {col_compare}
+                    	WHERE {target_table}._GSheet_row is NULL OR {col_compare}
                     	LIMIT 1
                     ),
                     diff_right AS (
@@ -440,7 +444,7 @@ def main():
                     	FROM current
                     	RIGHT JOIN {target_table}
                     	ON current._GSheet_row = {target_table}._GSheet_row
-                    	WHERE {col_compare}
+                    	WHERE current._GSheet_row is NULL OR {col_compare}
                     	LIMIT 1
                     )
                     SELECT *
