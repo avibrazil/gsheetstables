@@ -42,6 +42,27 @@ pip install mysql-connector-python
 gsheetstables2db -s 1zYR...tT8 --db mariadb://localhost/marketing_db
 ```
 
+### Run it regularly via `cron` or a `systemd` timer
+I have the following in my crontab:
+
+```shell
+*/20 * * * * $HOME/.local/bin/gsheetstables2db --sheet "1i…so" --db mariadb://localhost/my_db --table-prefix raw__ --append --keep-snapshots 100 --sql-split-char § --sql-post "{% for table in tables %} CREATE INDEX IF NOT EXISTST idx_snapshot_{{table}} ON raw__{{table}} (_GSheet_utc_timestamp) § CREATE VIEW IF NOT EXISTS {{table}} AS SELECT * FROM raw__{{table}} WHERE _GSheet_utc_timestamp=(SELECT max(_GSheet_utc_timestamp) FROM raw__{{table}}) § {% endfor %}" --service-account gsheets-access@my_project.iam.gserviceaccount.com --service-account-private-key "MIIF…very long private key…fR7qBJR4c="
+```
+Every 20 minutes, it will try to sync and update my DB tables with the Google Sheets Tables.
+Database table will only be updated if its correspondent GSheets Table has been modified.
+I’m connecting to a local MariaDB server configured to accept authenticated connections via UDP socket (`mariadb://localhost/…`), which eliminates the need for passwords.
+
+This line contains everything thats is needed for a successful run, no external config file is needed.
+The `…very long private key…` is computed and displayed to you when you run `gsheetstables2db -i SERVICE_ACCOUNT_FILE -vv`.
+Grab that long string, use it in the command line and then you can discard the service account JSON file.
+
+This command will write the tables into your DB with prefix `raw__` and then create views without that prefix with the last snapshot of that table.
+Data consumers should use the view, not the raw table.
+
+I admit this crontab line is too long and unreadable. So I suggest to actually use a more modern systemd timer to run this.
+
+
+## SQLAlchemy Drivers Reference
 Here are SQLAlchemy URL examples along with drivers required for connectors (table provided by ChatGPT):
 | Database | Example SQLAlchemy URL | Driver / Package to install | Notes |
 |--------|------------------------|-----------------------------|------|
