@@ -30,7 +30,7 @@ gsheetstables2db -s 1zYR...tT8 \
 Prepend “`mysheet_`” to all table names in DB, keep up to 6 snapshots of each table (after running it multiple times) and save a column with the row numbers that users see in GSpread:
 ```shell
 gsheetstables2db -s 1zYR...tT8 \
-    --table-prefix mysheet_
+    --table-prefix mysheet_ \
     --append \
     --keep-snapshots 6 \
     --row-numbers

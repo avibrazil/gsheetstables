@@ -11,7 +11,7 @@ import google.oauth2.service_account
 import googleapiclient.discovery
 import googleapiclient.errors
 
-__version__="2.2"
+__version__="2.3"
 
 
 class GSheetsTables():
