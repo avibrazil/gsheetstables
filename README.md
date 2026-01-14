@@ -6,6 +6,8 @@ Use Google Spreadsheet Tables (only Tables) as Pandas Dataframes or save them to
 pip install gsheetstables
 ```
 
+PyPi page: https://pypi.org/project/gsheetstables/
+
 ## Command Line tool
 
 The tool does one thing and does it well: Makes database tables of all the
