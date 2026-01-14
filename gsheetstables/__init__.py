@@ -11,7 +11,7 @@ import google.oauth2.service_account
 import googleapiclient.discovery
 import googleapiclient.errors
 
-__version__="2.1"
+__version__="2.2"
 
 
 class GSheetsTables():
@@ -186,6 +186,13 @@ class GSheetsTables():
                         stop  = self._t[i].raw_range.startRowIndex+2 + len(data_rows),
                     )
                 )
+
+                # convert anything that start with "#N/A" to NaN
+                .apply(
+                    lambda row: row.mask(row.astype(str).str.startswith('#N/A'))
+                )
+
+                # drop rows where all columns are empty
                 .dropna(how='all')
             )
 
