@@ -124,10 +124,11 @@ systemctl --user enable --now gsheetstables.timer
 ```
 
 ## SQLAlchemy Drivers Reference
-Here are SQLAlchemy URL examples along with drivers required for connectors (table provided by ChatGPT):
+Here are SQLAlchemy URL examples along with drivers required for connectors (table provided by ChatGPT and then edited a bit):
 | Database | Example SQLAlchemy URL | Driver / Package to install | Notes |
 |--------|------------------------|-----------------------------|------|
-| **MariaDB** | `mariadb+mariadbconnector://dbuser:dbpass@mariadb.example.com:3306/sales_db` | `pip install mariadb` | Native MariaDB driver |
+| **MariaDB via local socket** | `mariadb://localhost/sales_db` | `dnf install python3-mysqlclient` or `pip install mysqlclient` | [Unix user must match a MariaDB user configured with unix_socket](https://mariadb.com/docs/server/security/user-account-management/authentication-from-mariadb-10-4) |
+| **MariaDB with regular user** | `mariadb://dbuser:dbpass@mariadb.example.com:3306/sales_db` | `dnf install python3-mysqlclient` or `pip install mysqlclient` | Native MariaDB driver |
 | **MariaDB (alt)** | `mysql+pymysql://dbuser:dbpass@mariadb.example.com:3306/sales_db?charset=utf8mb4` | `pip install pymysql` | Pure Python |
 | **PostgreSQL** | `postgresql+psycopg://dbuser:dbpass@postgres.example.com:5432/analytics_db` | `pip install psycopg[binary]` | Recommended |
 | **PostgreSQL (legacy)** | `postgresql+psycopg2://dbuser:dbpass@postgres.example.com:5432/analytics_db` | `pip install psycopg2-binary` | Legacy |
