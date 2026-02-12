@@ -224,7 +224,11 @@ Displaying as just the date is an abbreviation that assumes interpretation by th
 Information that seems to contain just a date, is actually stored as the starting midnight of that day, in the timezone of the spreadsheet.
 If that date is describing a business transaction, it probably didn't happen at that moment, most likely closer to the mid of the day.
 Your spreadsheet must display timestamps as date and time to reduce ambiguity.
-Example of ambiguity is Alices‘s birthday as it is actually stored by your spreadsheet: **1990-05-12T00:00:00-03:00**. This timestamp is a different day in other timezones, for example, it is the same moment in Time as timestamp **1990-05-11T23:00:00-04:00** (late night of the previous day).
+Example of ambiguity is Alices‘s birthday as it is actually stored by your spreadsheet: **1990-05-12T00:00:00-03:00**.
+This timestamp is a different day in other timezones, for example, it is the same moment in Time as timestamp **1990-05-11T23:00:00-04:00** (late night of the previous day of another time zone).
+
+If you hide time and timezone from users, specially the ones that input data, you are increasing the chance of ambiguity.
+Data processing must always, ALWAYS, consider and handle time and timezone.
 
 ## Column names normalization
 
