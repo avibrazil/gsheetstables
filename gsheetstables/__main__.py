@@ -101,6 +101,14 @@ def prepare_args():
     )
 
     parser.add_argument(
+        '--rename',
+        dest='col_rename',
+        required=False,
+        default=None,
+        help='''Column rename map in JSON. Example: '{"table_1": {"Original column name": "simplified_name",…}, "table_2": {…}}'.'''
+    )
+
+    parser.add_argument(
         '-y', '--slugify',
         dest='slugify',
         action=argparse.BooleanOptionalAction,
@@ -108,24 +116,6 @@ def prepare_args():
         default=True,
         help='Slugify, simplify column names to be more database-friendly. Defaults to slugify.'
     )
-
-    # parser.add_argument(
-    #     '-r', '--row-numbers',
-    #     dest='rows',
-    #     action=argparse.BooleanOptionalAction,
-    #     required=False,
-    #     default=False,
-    #     help='Write the spreadsheet row number as table column _GSheet_row. Defaults to not write.'
-    # )
-
-    # parser.add_argument(
-    #     '-t', '--timestamp',
-    #     dest='timestamp',
-    #     action=argparse.BooleanOptionalAction,
-    #     required=False,
-    #     default=True,
-    #     help='Write the UTC timestamp when this program runs as table column _GSheetsTables_utc_timestamp. Defaults to write timestamps.'
-    # )
 
     parser.add_argument(
         '-a', '--append',
@@ -295,23 +285,35 @@ def main():
 
     # Check how we are going to authenticate with Google
     if args.service_account is not None and args.service_account_private_key is not None:
-        tables = gsheetstables.GSheetsTables(
-            gsheetid             = args.gsheet,
-            service_account      = args.service_account,
-            private_key          = decode_identity(args.service_account_private_key),
-            slugify              = args.slugify,
-        )
+        try:
+            tables = gsheetstables.GSheetsTables(
+                gsheetid             = args.gsheet,
+                service_account      = args.service_account,
+                private_key          = decode_identity(args.service_account_private_key),
+                slugify              = args.slugify,
+                column_rename_map    = json.loads(args.col_rename) if args.col_rename else None
+            )
+        except json.decoder.JSONDecodeError as e:
+            logger.error("Invalid JSON passed to --rename")
+            raise
+
     elif args.service_account_file is not None or default_identity_file.exists():
         identity=(args.service_account_file if args.service_account_file else default_identity_file)
 
         if args.verbose>=2:
             encode_identity(identity, logger)
 
-        tables = gsheetstables.GSheetsTables(
-            gsheetid             = args.gsheet,
-            service_account_file = identity,
-            slugify              = args.slugify,
-        )
+        try:
+            tables = gsheetstables.GSheetsTables(
+                gsheetid             = args.gsheet,
+                service_account_file = identity,
+                slugify              = args.slugify,
+                column_rename_map    = json.loads(args.col_rename) if args.col_rename else None
+            )
+        except json.decoder.JSONDecodeError as e:
+            logger.error("Invalid JSON passed to --rename")
+            raise
+
     else:
         logger.error("Either pass an identity file with -i or pure identity with -c and -m. Aborting.")
         sys.exit(1)
@@ -348,6 +350,8 @@ def main():
 
         for table in tables.tables:
 
+            table_exists=False
+
             # Check if table in DB needs an update by comparing DB’s table
             # timestamps and spreadsheet last modification time.
             if tables.modification_time:
@@ -383,7 +387,6 @@ def main():
                         table_exists=True
 
                 except sqlalchemy.exc.ProgrammingError:
-                    table_exists=False
                     logger.warning(f"Can’t check if table {table} requires a DB update; seems it doesn’t exist in database, so creating anyway. You should worry if you see this warning again and again in the future.")
 
 
@@ -397,7 +400,13 @@ def main():
             (
                 tables.t(table)
 
-                .assign(_GSheet_utc_timestamp=tables.modification_time.replace(microsecond=0))
+                .assign(
+                    _GSheet_utc_timestamp = (
+                        tables.modification_time.replace(microsecond=0)
+                        if tables.modification_time
+                        else datetime.datetime.now().replace(microsecond=0)
+                    )
+                )
 
                 .to_sql(
                     target_table,
