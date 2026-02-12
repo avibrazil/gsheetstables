@@ -71,7 +71,7 @@ ExecStart=%h/.local/bin/gsheetstables2db \
                 ) § \
         {% endfor %} \
     " \
-    --rename '
+    --rename ' \
         { \
             "table_1": { \
                 "Original column name": "new_name1", \
