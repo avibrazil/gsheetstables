@@ -45,24 +45,83 @@ gsheetstables2db -s 1zYR...tT8 --db mariadb://localhost/marketing_db
 ```
 
 ### Run it regularly via `cron` or a `systemd` timer
-I have the following in my crontab:
+I have the following in my personal `~/.config/systemd/user/gsheetstables.service`:
 
 ```shell
-*/20 * * * * $HOME/.local/bin/gsheetstables2db --sheet "1i…so" --db mariadb://localhost/my_db --table-prefix raw__ --append --keep-snapshots 100 --sql-split-char § --sql-post "{% for table in tables %} CREATE INDEX IF NOT EXISTST idx_snapshot_{{table}} ON raw__{{table}} (_GSheet_utc_timestamp) § CREATE VIEW IF NOT EXISTS {{table}} AS SELECT * FROM raw__{{table}} WHERE _GSheet_utc_timestamp=(SELECT max(_GSheet_utc_timestamp) FROM raw__{{table}}) § {% endfor %}" --service-account gsheets-access@my_project.iam.gserviceaccount.com --service-account-private-key "MIIF…very long private key…fR7qBJR4c="
+[Unit]
+Description=Sync tables from Investment Dashboard Google Sheet into MariaDB
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/gsheetstables2db \
+    --sheet 1i…so \
+    --db mariadb://localhost/my_db \
+    --table-prefix raw__ \
+    --append \
+    --keep-snapshots 100 \
+    --sql-split-char § \
+    --sql-post "\
+        {% for table in tables %} \
+            CREATE INDEX IF NOT EXISTS idx_snapshot_{{table}} \
+            ON raw__{{table}} (_GSheet_utc_timestamp) § \
+            CREATE VIEW IF NOT EXISTS {{table}} AS \
+                SELECT * FROM raw__{{table}} \
+                WHERE _GSheet_utc_timestamp=( \
+                    SELECT max(_GSheet_utc_timestamp) FROM raw__{{table}} \
+                ) § \
+        {% endfor %} \
+    " \
+    --rename '
+        { \
+            "table_1": { \
+                "Original column name": "new_name1", \
+                "Other original column name/tag": "new_name2" \
+            }, \
+            "table_2": { \
+                "Once more an original column name": "another_new_name1", \
+                "And again another original/nice column name": "new_name2" \
+            } \
+        } \
+    ' \
+    --service-account gsheets-access@my-app.iam.gserviceaccount.com \
+    --service-account-private-key "MII…F4c="
 ```
+
+And my personal `~/.config/systemd/user/gsheetstables.timer` contains:
+
+```shell
+[Unit]
+Description=Run Google Sheets sync frequently
+
+[Timer]
+OnCalendar=*:0/20
+
+[Install]
+WantedBy=timers.target
+```
+
 Every 20 minutes, it will try to sync and update my DB tables with the Google Sheets Tables.
-Database table will only be updated if its correspondent GSheets Table has been modified.
+Database tables will only be updated if its correspondent GSheets Table has been modified.
 I’m connecting to a local MariaDB server configured to accept authenticated connections via UDP socket (`mariadb://localhost/…`), which eliminates the need for passwords.
 
-This line contains everything thats is needed for a successful run, no external config file is needed.
+This single command contains everything thats is needed for a successful run, no external config file is needed.
 The `…very long private key…` is computed and displayed to you when you run `gsheetstables2db -i SERVICE_ACCOUNT_FILE -vv`.
-Grab that long string, use it in the command line and then you can discard the service account JSON file.
+Grab that long string, use it in the command line, along with `--service-account`, and then you can discard the service account JSON file.
 
-This command will write the tables into your DB with prefix `raw__` and then create views without that prefix with the last snapshot of that table.
-Data consumers should use the view, not the raw table.
+This command writes and logs up to 100 versions the my GSheets Tables into my DB with prefix `raw__` and then create views without that prefix with only the last snapshot of that table.
+Data consumers should use the view, not the raw table. The raw tables contains the time-tagged history of changes to each table.
 
-I admit this crontab line is too long and unreadable. So I suggest to actually use a more modern systemd timer to run this.
+Test it before scheduling it:
+```shell
+systemctl --user daemon-reload;
+systemctl --user start gsheetstables.service;
+systemctl --user status gsheetstables.service
+```
 
+When it is ready, enable the scheduler:
+```shell
+systemctl --user enable --now gsheetstables.timer
+```
 
 ## SQLAlchemy Drivers Reference
 Here are SQLAlchemy URL examples along with drivers required for connectors (table provided by ChatGPT):
