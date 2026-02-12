@@ -118,7 +118,7 @@ systemctl --user start gsheetstables.service;
 systemctl --user status gsheetstables.service
 ```
 
-When it is ready, enable the scheduler:
+When you are happy with results in your DB, enable the scheduler:
 ```shell
 systemctl --user enable --now gsheetstables.timer
 ```
