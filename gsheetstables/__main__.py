@@ -35,7 +35,7 @@ def prepare_logging(verbose: int):
     )
 
     loggers=[
-        logging.getLogger(__name__),
+        # logging.getLogger(__name__),
         logging.getLogger('gsheetstables'),
     ]
 
@@ -320,59 +320,61 @@ def main():
 
     db = get_db(args.db_url, args.verbose>0)
 
-    with db.begin() as db_connection:
-        # 1. Run sql_pre script
-        # 2. Check if spreadhseet time is more recent than table snapshot in DB
-        # 3. Write data to auxiliary table
-        # 4. Compare last official snapshot with new data on auxiliary table
-        # 5. Append auxiliary table into target table with new timestamp
-        # 6. Drop auxiliary table
-        # 7. Cleanup old data from tables, in case of appending
-        # 8. Run sql_post script
+    # 1. Run sql_pre script
+    # 2. Check if spreadhseet time is more recent than table snapshot in DB
+    # 3. Write data to auxiliary table
+    # 4. Compare last official snapshot with new data on auxiliary table
+    # 5. Append auxiliary table into target table with new timestamp
+    # 6. Drop auxiliary table
+    # 7. Cleanup old data from tables, in case of appending
+    # 8. Run sql_post script
 
-        if args.sql_pre:
-            meta_script = jinja2.Template(args.sql_pre)
-            script=meta_script.render(
-                tables=tables.tables
-            )
+    if args.sql_pre:
+        meta_script = jinja2.Template(args.sql_pre)
+        script=meta_script.render(
+            tables=tables.tables
+        )
 
-            logger.debug(f"Run pre SQL script: \n{script}")
+        logger.debug(f"Run pre SQL script: \n{script}")
 
-            if args.sql_split_char:
-                script=[s for s in (s.strip() for s in script.split(args.sql_split_char)) if s]
+        if args.sql_split_char:
+            script=[s for s in (s.strip() for s in script.split(args.sql_split_char)) if s]
 
-            logger.debug(f"Pre script: \n{script}")
+        logger.debug(f"Pre script: \n{script}")
 
+        with db.begin() as db_connection:
             for s in script:
                 db_connection.execute(sqlalchemy.text(s))
 
-        now = datetime.datetime.now(datetime.timezone.utc)
+    now = datetime.datetime.now(datetime.timezone.utc)
 
-        for table in tables.tables:
+    for table in tables.tables:
+        logger.debug(f"DB table update logic for {table}...")
 
-            table_exists=False
+        table_exists=False
 
-            # Check if table in DB needs an update by comparing DB’s table
-            # timestamps and spreadsheet last modification time.
-            if tables.modification_time:
+        # Check if table in DB needs an update by comparing DB’s table
+        # timestamps and spreadsheet last modification time.
+        if tables.modification_time:
 
-                versions_query = (
-                    sqlalchemy.text(
-                        textwrap.dedent(f"""\
-                            SELECT DISTINCT _GSheet_utc_timestamp
-                            FROM {args.table_prefix}{table}
-                            WHERE _GSheet_utc_timestamp >= :modification_time"""
-                        )
-                    )
-                    .bindparams(modification_time=tables.modification_time.replace(microsecond=0))
-                    .compile(
-                        dialect=db.dialect,
-                        compile_kwargs=dict(literal_binds=True)
+            versions_query = (
+                sqlalchemy.text(
+                    textwrap.dedent(f"""\
+                        SELECT DISTINCT _gsheet_utc_timestamp
+                        FROM {args.table_prefix}{table}
+                        WHERE _gsheet_utc_timestamp >= :modification_time"""
                     )
                 )
+                .bindparams(modification_time=tables.modification_time.replace(microsecond=0))
+                .compile(
+                    dialect=db.dialect,
+                    compile_kwargs=dict(literal_binds=True)
+                )
+            )
 
-                logger.debug(f"Checking if {table} requires update with query: {versions_query}")
+            logger.debug(f"Checking if {table} requires update with query: {versions_query}")
 
+            with db.begin() as db_connection:
                 try:
                     versions = pandas.read_sql_query(versions_query, con=db_connection)
                     if len(versions) > 0:
@@ -386,7 +388,7 @@ def main():
                         logger.info(f"Table {table} will get new data in DB.")
                         table_exists=True
 
-                except sqlalchemy.exc.ProgrammingError:
+                except (sqlalchemy.exc.ProgrammingError, sqlalchemy.exc.OperationalError):
                     logger.warning(f"Can’t check if table {table} requires a DB update; seems it doesn’t exist in database, so creating anyway. You should worry if you see this warning again and again in the future.")
 
 
@@ -395,127 +397,145 @@ def main():
 
             logger.debug(f"Write table data initially to {target_table}")
 
-            # Write DataFrame to DB, either as a temporary table suited for data
-            # comparison, or as the final table
-            (
-                tables.t(table)
+            with db.begin() as db_connection:
+                # Write DataFrame to DB, either as a temporary table suited for
+                # data comparison, or as the final table
+                (
+                    tables.t(table)
 
-                .assign(
-                    _GSheet_utc_timestamp = (
-                        tables.modification_time.replace(microsecond=0)
-                        if tables.modification_time
-                        else datetime.datetime.now().replace(microsecond=0)
+                    .assign(
+                        _gsheet_utc_timestamp = (
+                            tables.modification_time.astimezone(datetime.timezone.utc)
+                            if tables.modification_time
+                            else datetime.now(datetime.timezone.utc)
+                        ).replace(microsecond=0)
+                    )
+
+                    .to_sql(
+                        target_table,
+                        if_exists=("append" if args.append else "replace"),
+                        con=db_connection,
+                        index=True
                     )
                 )
 
-                .to_sql(
-                    target_table,
-                    if_exists=("append" if args.append else "replace"),
-                    con=db_connection,
-                    index=True
-                )
-            )
+                # Check if data really changed
+                if table_exists:
 
-            # Check if data really changed
-            if table_exists:
+                    logger.debug(f"Compare new data with last snapshot")
 
-                logger.debug(f"Compare new data with last snapshot")
+                    col_compare = ' OR '.join([
+                        f"current.`{c}` <> {target_table}.`{c}`"
+                        for c in tables.t(table).columns
+                        if c not in {'_gsheet_row'}
+                    ])
 
-                col_compare = ' OR '.join([
-                    f"current.`{c}` <> {target_table}.`{c}`"
-                    for c in tables.t(table).columns
-                    if c not in {'_GSheet_row'}
-                ])
-
-                # If the following query returns more than zero lines, table
-                # has changed and requires update.
-                # Query is a bit too complex to keep compatibility with all DBs,
-                # specially those that don’t support full outer join (MariaDB).
-                diff_query = textwrap.dedent(f"""\
-                    WITH current AS (
-                    	SELECT *
-                    	FROM {final_table}
-                    	WHERE _GSheet_utc_timestamp = (
-                            SELECT MAX(_GSheet_utc_timestamp)
-                            FROM {final_table}
+                    # If the following query returns more than zero lines, table
+                    # has changed and requires update.
+                    # Query is a bit too complex to keep compatibility with all DBs,
+                    # specially those that don’t support full outer join (MariaDB).
+                    diff_query = textwrap.dedent(f"""\
+                        WITH current AS (
+                        	SELECT *
+                        	FROM {final_table}
+                        	WHERE _gsheet_utc_timestamp = (
+                                SELECT MAX(_gsheet_utc_timestamp)
+                                FROM {final_table}
+                            )
+                        ),
+                        diff_left AS (
+                        	SELECT current._gsheet_row
+                        	FROM current
+                        	LEFT JOIN {target_table}
+                        	ON current._gsheet_row = {target_table}._gsheet_row
+                        	WHERE {target_table}._gsheet_row is NULL OR {col_compare}
+                        	LIMIT 1
+                        ),
+                        diff_right AS (
+                        	SELECT {target_table}._gsheet_row
+                        	FROM current
+                        	RIGHT JOIN {target_table}
+                        	ON current._gsheet_row = {target_table}._gsheet_row
+                        	WHERE current._gsheet_row is NULL OR {col_compare}
+                        	LIMIT 1
                         )
-                    ),
-                    diff_left AS (
-                    	SELECT current._GSheet_row
-                    	FROM current
-                    	LEFT JOIN {target_table}
-                    	ON current._GSheet_row = {target_table}._GSheet_row
-                    	WHERE {target_table}._GSheet_row is NULL OR {col_compare}
-                    	LIMIT 1
-                    ),
-                    diff_right AS (
-                    	SELECT {target_table}._GSheet_row
-                    	FROM current
-                    	RIGHT JOIN {target_table}
-                    	ON current._GSheet_row = {target_table}._GSheet_row
-                    	WHERE current._GSheet_row is NULL OR {col_compare}
-                    	LIMIT 1
-                    )
-                    SELECT *
-                    FROM diff_left
-                    UNION
-                    SELECT *
-                    FROM diff_right
-                """)
+                        SELECT *
+                        FROM diff_left
+                        UNION
+                        SELECT *
+                        FROM diff_right
+                    """)
 
-                diff = pandas.read_sql_query(diff_query, con=db_connection)
-                if len(diff) > 0:
-                    # Data of this scpecific table has changed, append to main
-                    # table.
+                    diff = pandas.read_sql_query(diff_query, con=db_connection)
+                    if len(diff) > 0:
+                        # Data of this scpecific table has changed, append to main
+                        # table.
 
-                    logger.debug(f"Detected change in data; updating {final_table}")
+                        logger.debug(f"Detected change in data; updating {final_table}")
 
+                        db_connection.execute(
+                            sqlalchemy.text(textwrap.dedent(f"""\
+                                INSERT INTO {final_table}
+                                SELECT * FROM {target_table}
+                            """))
+                        )
+                    else:
+                        logger.debug(f"Data for table {final_table} didn't change; not updating")
+
+                    logger.debug(f"Drop auxiliary table {target_table}")
                     db_connection.execute(
                         sqlalchemy.text(textwrap.dedent(f"""\
-                            INSERT INTO {final_table}
-                            SELECT * FROM {target_table}
+                            DROP TABLE {target_table}
                         """))
                     )
-                else:
-                    logger.debug(f"Data for table {final_table} didn't change; not updating")
 
-                logger.debug(f"Drop auxiliary table {target_table}")
-                db_connection.execute(
-                    sqlalchemy.text(textwrap.dedent(f"""\
-                        DROP TABLE {target_table}
-                    """))
-                )
+                # Delete old table snapshots, keep only args.nsnapshots
+                if args.append and args.nsnapshots>0:
+                    logger.debug(f"Delete old snapshots")
 
-            # Delete old table snapshots, keep only args.nsnapshots
-            if args.append and args.nsnapshots>0:
-                logger.debug(f"Delete old snapshots")
-                db_connection.execute(sqlalchemy.text(textwrap.dedent(f"""\
-                    DELETE t
-                    FROM {final_table} AS t
-                    LEFT JOIN (
-                        SELECT _GSheet_utc_timestamp
-                        FROM {final_table}
-                        GROUP BY _GSheet_utc_timestamp
-                        ORDER BY _GSheet_utc_timestamp DESC
-                        LIMIT {args.nsnapshots}
-                    ) AS keep
-                    ON keep._GSheet_utc_timestamp = t._GSheet_utc_timestamp
-                    WHERE keep._GSheet_utc_timestamp IS NULL
-                    """))
-                )
+                    # Do this with 2 queries to be more portable amongst
+                    # different DBs
+
+                    oldest = pandas.read_sql_query(
+                        con=db_connection,
+                        sql=textwrap.dedent(f"""
+                            WITH
+                                too_old AS (
+                                	SELECT DISTINCT _gsheet_utc_timestamp
+                                	FROM {final_table}
+                                	ORDER BY _gsheet_utc_timestamp DESC
+                                    LIMIT {args.nsnapshots}
+                                    OFFSET {args.nsnapshots}
+                                )
+                            SELECT _gsheet_utc_timestamp
+                            FROM too_old
+                            LIMIT 1
+                        """)
+                    )
+
+                    if len(oldest) > 0:
+                        db_connection.execute(
+                            sqlalchemy.text(textwrap.dedent(f"""\
+                                DELETE FROM {final_table}
+                                WHERE _gsheet_utc_timestamp <= :time
+                                """
+                            )),
+                            dict(time=oldest.loc[0].values[0])
+                        )
 
 
-        if args.sql_post:
-            meta_script = jinja2.Template(args.sql_post)
-            script=meta_script.render(
-                tables=tables.tables
-            )
+    if args.sql_post:
+        meta_script = jinja2.Template(args.sql_post)
+        script=meta_script.render(
+            tables=tables.tables
+        )
 
-            logger.debug(f"Run post SQL script: \n{script}")
+        logger.debug(f"Run post SQL script: \n{script}")
 
-            if args.sql_split_char:
-                script=[s for s in (s.strip() for s in script.split(args.sql_split_char)) if s]
+        if args.sql_split_char:
+            script=[s for s in (s.strip() for s in script.split(args.sql_split_char)) if s]
 
+        with db.begin() as db_connection:
             for s in script:
                 db_connection.execute(sqlalchemy.text(s))
 

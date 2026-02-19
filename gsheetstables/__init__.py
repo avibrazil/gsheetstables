@@ -11,7 +11,7 @@ import google.oauth2.service_account
 import googleapiclient.discovery
 import googleapiclient.errors
 
-__version__="2.4"
+__version__="3.0"
 
 
 class GSheetsTables():
@@ -101,14 +101,16 @@ class GSheetsTables():
         self._t=list()
 
         try:
-            self.modification_time = datetime.datetime.fromisoformat(
-                self.GoogleDrive
-                .get(
-                    fileId=self.gsheetid,
-                    fields="modifiedTime"
+            self.modification_time = (
+                datetime.datetime.fromisoformat(
+                    self.GoogleDrive
+                    .get(
+                        fileId=self.gsheetid,
+                        fields="modifiedTime"
+                    )
+                    .execute()
+                    ["modifiedTime"]
                 )
-                .execute()
-                ["modifiedTime"]
             )
 
             self.logger.info(f"Spreadsheet last modification time is {self.modification_time}")
@@ -181,7 +183,7 @@ class GSheetsTables():
                     columns=columns,
                     data=data_rows,
                     index=pandas.RangeIndex(
-                        name  = '_GSheet_row',
+                        name  = '_gsheet_row',
                         start = self._t[i].raw_range.startRowIndex+2,
                         stop  = self._t[i].raw_range.startRowIndex+2 + len(data_rows),
                     )
