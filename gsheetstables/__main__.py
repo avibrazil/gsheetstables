@@ -425,7 +425,7 @@ def main():
                     logger.debug(f"Compare new data with last snapshot")
 
                     col_compare = ' OR '.join([
-                        f"current.`{c}` <> {target_table}.`{c}`"
+                        f"current.{c} <> {target_table}.{c}"
                         for c in tables.t(table).columns
                         if c not in {'_gsheet_row'}
                     ])
