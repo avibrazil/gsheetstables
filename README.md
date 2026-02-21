@@ -132,7 +132,7 @@ Here are SQLAlchemy URL examples along with drivers required for connectors (tab
 | **MariaDB via local socket** | `mariadb://localhost/sales_db` | `dnf install python3-mysqlclient` or `pip install mysqlclient` | [Unix user must match a MariaDB user configured with unix_socket](https://mariadb.com/docs/server/security/user-account-management/authentication-from-mariadb-10-4) |
 | **MariaDB with regular user** | `mariadb://dbuser:dbpass@mariadb.example.com:3306/sales_db` | `dnf install python3-mysqlclient` or `pip install mysqlclient` | Native MariaDB driver |
 | **MariaDB (alt)** | `mysql+pymysql://dbuser:dbpass@mariadb.example.com:3306/sales_db?charset=utf8mb4` | `pip install pymysql` | Pure Python |
-| **PostgreSQL via local socket** | `postgresql+psycopg://dbuser@/analytics_db` | `dnf install python3-psycopg3 python3-sqlalchemy+postgresql` or `pip install psycopg[binary]` | Recommended |
+| **PostgreSQL via local socket** | `postgresql+psycopg:///analytics_db` (note the 3 slashes) | `dnf install python3-psycopg3 python3-sqlalchemy+postgresql` or `pip install psycopg[binary]` | Recommended |
 | **PostgreSQL** | `postgresql+psycopg://dbuser:dbpass@postgres.example.com:5432/analytics_db` | `dnf install python3-psycopg3 python3-sqlalchemy+postgresql` or `pip install psycopg[binary]` | Recommended |
 | **PostgreSQL (legacy)** | `postgresql+psycopg2://dbuser:dbpass@postgres.example.com:5432/analytics_db` | `pip install psycopg2-binary` | Legacy |
 | **Oracle** | `oracle+oracledb://dbuser:dbpass@oracle.example.com:1521/?service_name=ORCLPDB1` | `pip install oracledb` | Thin mode (no Oracle Client) |
