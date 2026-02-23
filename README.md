@@ -8,6 +8,20 @@ pip install gsheetstables
 
 PyPi page: https://pypi.org/project/gsheetstables/
 
+In case you want your distribution’s dependencies, here are what’s needed in
+Fedora:
+
+```shell
+dnf install -y \
+    python3-unidecode \
+    python3-dotmap \
+    python3-pandas \
+    python3-google-auth-oauthlib \
+    python3-google-api-client \
+    python3-jinja2 \
+    python3-sqlalchemy
+```
+
 ## Command Line tool
 
 The tool does one thing and does it well: Makes database tables of all the
