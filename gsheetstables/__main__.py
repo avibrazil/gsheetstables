@@ -69,6 +69,14 @@ def prepare_args():
     )
 
     parser.add_argument(
+        '--schema',
+        dest='db_schema',
+        required=False,
+        default=None,
+        help='Write tables into a specific DB schema, if backend supports schemas'
+    )
+
+    parser.add_argument(
         '-p', '--table-prefix',
         dest='table_prefix',
         required=False,
@@ -347,10 +355,13 @@ def main():
                 db_connection.execute(sqlalchemy.text(s))
 
     now = datetime.datetime.now(datetime.timezone.utc)
+    textual_db_schema=f"{args.db_schema}." if args.db_schema else ''
+
 
     for table in tables.tables:
         logger.debug(f"DB table update logic for {table}...")
 
+        final_table = f"{args.table_prefix}{table}"
         table_exists=None
 
         # Check if table in DB needs an update by comparing DB’s table
@@ -361,7 +372,7 @@ def main():
                 sqlalchemy.text(
                     textwrap.dedent(f"""\
                         SELECT DISTINCT _gsheet_utc_timestamp
-                        FROM {args.table_prefix}{table}
+                        FROM {textual_db_schema}{final_table}
                         WHERE _gsheet_utc_timestamp >= :modification_time"""
                     )
                 )
@@ -393,8 +404,6 @@ def main():
                     table_exists=False
 
         with db.begin() as db_connection:
-            final_table = args.table_prefix + table
-
             if table_exists is None:
                 table_exists=sqlalchemy.inspect(db_connection).has_table(final_table)
 
@@ -411,13 +420,15 @@ def main():
                     _gsheet_utc_timestamp = (
                         tables.modification_time.astimezone(datetime.timezone.utc)
                         if tables.modification_time
-                        else datetime.datetime.now(datetime.timezone.utc)
+                        else now
                     ).replace(microsecond=0)
                 )
 
                 .to_sql(
                     target_table,
+                    schema=args.db_schema,
                     if_exists=("append" if args.append else "replace"),
+                    method='multi',
                     con=db_connection,
                     index=True
                 )
@@ -441,25 +452,25 @@ def main():
                 diff_query = textwrap.dedent(f"""\
                     WITH current AS (
                         SELECT *
-                        FROM {final_table}
+                        FROM {textual_db_schema}{final_table}
                         WHERE _gsheet_utc_timestamp = (
                             SELECT MAX(_gsheet_utc_timestamp)
-                            FROM {final_table}
+                            FROM {textual_db_schema}{final_table}
                         )
                     ),
                     diff_left AS (
                         SELECT current._gsheet_row
                         FROM current
-                        LEFT JOIN {target_table}
-                        ON current._gsheet_row = {target_table}._gsheet_row
-                        WHERE {target_table}._gsheet_row is NULL OR {col_compare}
+                        LEFT JOIN {textual_db_schema}{target_table}
+                        ON current._gsheet_row = {textual_db_schema}{target_table}._gsheet_row
+                        WHERE {textual_db_schema}{target_table}._gsheet_row is NULL OR {col_compare}
                         LIMIT 1
                     ),
                     diff_right AS (
-                        SELECT {target_table}._gsheet_row
+                        SELECT {textual_db_schema}{target_table}._gsheet_row
                         FROM current
-                        RIGHT JOIN {target_table}
-                        ON current._gsheet_row = {target_table}._gsheet_row
+                        RIGHT JOIN {textual_db_schema}{target_table}
+                        ON current._gsheet_row = {textual_db_schema}{target_table}._gsheet_row
                         WHERE current._gsheet_row is NULL OR {col_compare}
                         LIMIT 1
                     )
@@ -479,8 +490,8 @@ def main():
 
                     db_connection.execute(
                         sqlalchemy.text(textwrap.dedent(f"""\
-                            INSERT INTO {final_table}
-                            SELECT * FROM {target_table}
+                            INSERT INTO {textual_db_schema}{final_table}
+                            SELECT * FROM {textual_db_schema}{target_table}
                         """))
                     )
                 else:
@@ -489,7 +500,7 @@ def main():
                 logger.debug(f"Drop auxiliary table {target_table}")
                 db_connection.execute(
                     sqlalchemy.text(textwrap.dedent(f"""\
-                        DROP TABLE {target_table}
+                        DROP TABLE {textual_db_schema}{target_table}
                     """))
                 )
 
@@ -506,7 +517,7 @@ def main():
                         WITH
                             too_old AS (
                                 SELECT DISTINCT _gsheet_utc_timestamp
-                                FROM {final_table}
+                                FROM {textual_db_schema}{final_table}
                                 ORDER BY _gsheet_utc_timestamp DESC
                                 LIMIT {args.nsnapshots}
                                 OFFSET {args.nsnapshots}
@@ -520,7 +531,7 @@ def main():
                 if len(oldest) > 0:
                     db_connection.execute(
                         sqlalchemy.text(textwrap.dedent(f"""\
-                            DELETE FROM {final_table}
+                            DELETE FROM {textual_db_schema}{final_table}
                             WHERE _gsheet_utc_timestamp <= :time
                             """
                         )),
