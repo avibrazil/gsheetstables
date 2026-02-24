@@ -398,7 +398,7 @@ def main():
             if table_exists is None:
                 table_exists=sqlalchemy.inspect(db_connection).has_table(final_table)
 
-            target_table=f'__tmp_{final_table}' if table_exists else final_table
+            target_table=f'{final_table}___tmp_' if table_exists else final_table
 
             logger.debug(f"Write table data initially to {target_table}")
 
