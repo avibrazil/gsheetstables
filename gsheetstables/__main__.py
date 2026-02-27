@@ -54,7 +54,7 @@ def prepare_args():
     )
 
     parser.add_argument(
-        '-s', '--sheet',
+        '--sheet', '-s',
         dest='gsheet',
         required=True,
         help='ID of Google Sheet to retrieve Tables.'
@@ -77,7 +77,7 @@ def prepare_args():
     )
 
     parser.add_argument(
-        '-p', '--table-prefix',
+        '--table-prefix', '-p',
         dest='table_prefix',
         required=False,
         default='',
@@ -85,7 +85,7 @@ def prepare_args():
     )
 
     parser.add_argument(
-        '-i', '--identity-file',
+        '--identity-file', '-i',
         dest='service_account_file',
         required=False,
         default=None,
@@ -93,7 +93,7 @@ def prepare_args():
     )
 
     parser.add_argument(
-        '-c', '--service-account',
+        '--service-account', '-c',
         dest='service_account',
         required=False,
         default=None,
@@ -101,7 +101,7 @@ def prepare_args():
     )
 
     parser.add_argument(
-        '-m', '--service-account-private-key',
+        '--service-account-private-key', '-m',
         dest='service_account_private_key',
         required=False,
         default=None,
@@ -117,7 +117,7 @@ def prepare_args():
     )
 
     parser.add_argument(
-        '-y', '--slugify',
+        '--slugify', '-y',
         dest='slugify',
         action=argparse.BooleanOptionalAction,
         required=False,
@@ -126,7 +126,7 @@ def prepare_args():
     )
 
     parser.add_argument(
-        '-n', '--keep-snapshots',
+        '--keep-snapshots', '-n',
         dest='nsnapshots',
         type=int,
         required=False,
@@ -159,7 +159,7 @@ def prepare_args():
     )
 
     parser.add_argument(
-        '-v', '--verbose',
+        '--verbose', '-v',
         dest='verbose',
         action="count",
         default=0,
