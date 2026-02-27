@@ -126,21 +126,12 @@ def prepare_args():
     )
 
     parser.add_argument(
-        '-a', '--append',
-        dest='append',
-        action=argparse.BooleanOptionalAction,
-        required=False,
-        default=False,
-        help='Append data to existing table instead of droping and recreating table. Activates --timestamp too. Defaults to not append.'
-    )
-
-    parser.add_argument(
         '-n', '--keep-snapshots',
         dest='nsnapshots',
         type=int,
         required=False,
-        default=3,
-        help='Keep only the last N snapshots when using --append, and delete older ones. Pass 0 to never delete snapshots. Defaults to 3.'
+        default=1,
+        help='Keep only the last N snapshots of data and delete older ones. Pass 0 to never delete snapshots. Defaults is 1, which keeps only the current state of the GSheet table.'
     )
 
     parser.add_argument(
@@ -362,7 +353,7 @@ def main():
         logger.debug(f"DB table update logic for {table}...")
 
         final_table = f"{args.table_prefix}{table}"
-        table_exists=None
+        table_exists = None  # don't know yet
 
         # Check if table in DB needs an update by comparing DB’s table
         # timestamps and spreadsheet last modification time.
@@ -405,7 +396,14 @@ def main():
 
         with db.begin() as db_connection:
             if table_exists is None:
-                table_exists=sqlalchemy.inspect(db_connection).has_table(final_table)
+                table_exists = (
+                    sqlalchemy.inspect(db_connection)
+                    .has_table(
+                        table_name = final_table,
+                        schema     = args.db_schema
+                    )
+                )
+                logger.debug(f"Check if target «{textual_db_schema}{final_table}» exists for {table}: {table_exists}")
 
             target_table=f'{final_table}___tmp_' if table_exists else final_table
 
@@ -427,7 +425,7 @@ def main():
                 .to_sql(
                     target_table,
                     schema=args.db_schema,
-                    if_exists=("append" if args.append else "replace"),
+                    if_exists='append',
                     method='multi',
                     con=db_connection,
                     index=True
@@ -435,7 +433,7 @@ def main():
             )
 
             # Check if data really changed
-            if table_exists:
+            if table_exists is True:
 
                 logger.debug(f"Compare new data with last snapshot")
 
@@ -505,12 +503,13 @@ def main():
                 )
 
             # Delete old table snapshots, keep only args.nsnapshots
-            if args.append and args.nsnapshots>0:
+            if args.nsnapshots>0:
                 logger.debug(f"Delete old snapshots")
 
                 # Do this with 2 queries to be more portable amongst
                 # different DBs
 
+                # Discover the oldest allowed snapshot time
                 oldest = pandas.read_sql_query(
                     con=db_connection,
                     sql=textwrap.dedent(f"""
@@ -528,14 +527,27 @@ def main():
                     """)
                 )
 
+                # Delete everything that is older than oldest allowed snapshot
                 if len(oldest) > 0:
+                    oldest = (
+                        oldest.loc[0].values[0]
+                        .astype("datetime64[us]")
+                        .astype(datetime.datetime)
+                        .replace(tzinfo=datetime.timezone.utc)
+                    )
+
+                    logger.debug(
+                        "Delete anything older than last allowed snapshot: ",
+                        oldest
+                    )
+
                     db_connection.execute(
                         sqlalchemy.text(textwrap.dedent(f"""\
                             DELETE FROM {textual_db_schema}{final_table}
                             WHERE _gsheet_utc_timestamp <= :time
                             """
                         )),
-                        dict(time=oldest.loc[0].values[0])
+                        dict(time = oldest)
                     )
 
 

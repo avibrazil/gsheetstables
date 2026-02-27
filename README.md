@@ -48,7 +48,6 @@ Prepend “`mysheet_`” to all table names in DB, keep up to 6 snapshots of eac
 ```shell
 gsheetstables2db -s 1zYR...tT8 \
     --table-prefix mysheet_ \
-    --append \
     --keep-snapshots 6 \
     --row-numbers
 ```
@@ -72,7 +71,6 @@ ExecStart=%h/.local/bin/gsheetstables2db \
     --sheet 1i…so \
     --db mariadb://localhost/my_db \
     --table-prefix raw__ \
-    --append \
     --keep-snapshots 100 \
     --sql-split-char § \
     --sql-post "\
