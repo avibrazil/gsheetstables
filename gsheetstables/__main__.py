@@ -330,6 +330,7 @@ def main():
     # 8. Run sql_post script
 
     if args.sql_pre:
+        args.sql_pre=textwrap.dedent(args.sql_pre)
         meta_script = jinja2.Template(args.sql_pre)
         script=meta_script.render(
             tables=tables.tables
@@ -569,6 +570,7 @@ def main():
 
 
     if args.sql_post:
+        args.sql_post=textwrap.dedent(args.sql_post)
         meta_script = jinja2.Template(args.sql_post)
         script=meta_script.render(
             tables=tables.tables
@@ -579,7 +581,7 @@ def main():
 
         with db.begin() as db_connection:
             for s in script:
-                logger.debug(f"Run post SQL command: {s}")
+                logger.debug(f"Run post SQL command: {' '.join(s.split())}")
                 db_connection.execute(sqlalchemy.text(s))
 
 
