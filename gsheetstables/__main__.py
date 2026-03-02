@@ -6,6 +6,7 @@
 
 import sys
 import os
+import math
 import datetime
 import textwrap
 import argparse
@@ -407,30 +408,46 @@ def main():
 
             target_table=f'{final_table}___tmp_' if table_exists else final_table
 
-            logger.debug(f"Write table data initially to {target_table}")
+            df = tables.t(table)
+
+            # Work through a SQLAlchemy or PsycoPG or PostgreSQL INSERT limitation
+            pages     = math.ceil((df.shape[0] * df.shape[1]) / 65000)
+            page_size = math.floor(df.shape[0] / pages)+1
+
+            if pages == 1:
+                logger.info(f"Write table data initially to {target_table}, all data at once.")
+            else:
+                logger.info(f"Write table data initially to {target_table}, {pages} page(s) of {page_size} rows each.")
 
             # Write DataFrame to DB, either as a temporary table suited for
             # data comparison, or as the final table
-            (
-                tables.t(table)
+            for i in range(0, len(df), page_size):
+                logger.debug(f"{target_table}: chunk {i}:{page_size + i}")
+                (
+                    df
 
-                .assign(
-                    _gsheet_utc_timestamp = (
-                        tables.modification_time.astimezone(datetime.timezone.utc)
-                        if tables.modification_time
-                        else now
-                    ).replace(microsecond=0)
-                )
+                    .iloc[i:page_size+i]
 
-                .to_sql(
-                    target_table,
-                    schema=args.db_schema,
-                    if_exists='append',
-                    method='multi',
-                    con=db_connection,
-                    index=True
+                    .assign(
+                        _gsheet_utc_timestamp = (
+                            (
+                                tables.modification_time
+                                .astimezone(datetime.timezone.utc)
+                            )
+                            if tables.modification_time
+                            else now
+                        ).replace(microsecond=0)
+                    )
+
+                    .to_sql(
+                        target_table,
+                        schema=args.db_schema,
+                        if_exists='append',
+                        method='multi',
+                        con=db_connection,
+                        index=True
+                    )
                 )
-            )
 
             # Check if data really changed
             if table_exists is True:
@@ -557,13 +574,12 @@ def main():
             tables=tables.tables
         )
 
-        logger.debug(f"Run post SQL script: \n{script}")
-
         if args.sql_split_char:
             script=[s for s in (s.strip() for s in script.split(args.sql_split_char)) if s]
 
         with db.begin() as db_connection:
             for s in script:
+                logger.debug(f"Run post SQL command: {s}")
                 db_connection.execute(sqlalchemy.text(s))
 
 
