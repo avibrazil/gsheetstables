@@ -136,6 +136,64 @@ When you are happy with results in your DB, enable the scheduler:
 ```shell
 systemctl --user enable --now gsheetstables.timer
 ```
+## Table Foreign Keys
+Here is an example where foreign keys will defined for each table after the ETL:
+
+```shell
+gsheetstables2db \
+    --db postgresql+psycopg:///business_intelligence \
+    --sql-post "
+        {%
+            set foreign_keys = dict(
+                sales = dict(
+                    id_client = 'client(id)',
+                    id_product = 'product(id)'
+                ),
+                client_addresses = dict(
+                    id_client = 'client(id)'
+                ),
+            )
+        %}
+
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_client_id  ON client  (id); §
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_product_id ON product (id); §
+
+        {% for table, fks in foreign_keys.items() %}
+            {% for fk, target in fks.items() %}
+                DO $$$$
+                BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1
+                        FROM information_schema.table_constraints
+                        WHERE
+                            table_schema = 'public' AND
+                            table_name = '{{table}}' AND
+                            constraint_name = 'fk_table_{{table}}_column_{{fk}}'
+                    ) THEN
+                        ALTER TABLE {{table}}
+                        ADD CONSTRAINT fk_table_{{table}}_column_{{fk}}
+                        FOREIGN KEY ({{fk}})
+                        REFERENCES {{target}}
+                        ON DELETE CASCADE;
+                    END IF;
+                END $$$$; §
+            {% endfor %}
+        {% endfor %}
+    " \
+    --sql-split-char § \
+    --sheet 1i…so \
+    --service-account gsheets-access@my-app.iam.gserviceaccount.com \
+    --service-account-private-key "MII…F4c="
+```
+
+This Jinja template:
+1. Defines a map of tables and their columns that are foreign keys, and which table and column it references.
+2. Create a unique index in master tables (`client`, `product`) -- a requirement to be a foreign key reference.
+3. Iterate over the map and defines each foreign key, but only if it was not defined yet.
+
+This is the way of doing it [idempotently](https://en.wikipedia.org/wiki/Idempotence)
+on PostgreSQL. Other DBs might have simpler ways with `ALTER TABLE ... ADD CONSTRAINT IF NOT EXISTS ...`.
+
 
 ## SQLAlchemy Drivers Reference
 Here are SQLAlchemy URL examples along with drivers required for connectors (table provided by ChatGPT and then edited a bit):
