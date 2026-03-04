@@ -330,21 +330,19 @@ def main():
     # 8. Run sql_post script
 
     if args.sql_pre:
-        args.sql_pre=textwrap.dedent(args.sql_pre)
-        meta_script = jinja2.Template(args.sql_pre)
-        script=meta_script.render(
-            tables=tables.tables
-        )
+        script = jinja2.Template(args.sql_pre).render(tables=tables.tables)
 
-        logger.debug(f"Run pre SQL script: \n{script}")
-
-        if args.sql_split_char:
+        if args.sql_split_char and args.sql_split_char in script:
+        	# Script has multiple commands
             script=[s for s in (s.strip() for s in script.split(args.sql_split_char)) if s]
-
-        logger.debug(f"Pre script: \n{script}")
+        else:
+        	# Script is only 1 command
+        	script=[script]
 
         with db.begin() as db_connection:
             for s in script:
+                ss=' '.join(s.split())
+                logger.debug(f"Run pre ETL SQL command: {ss}")
                 db_connection.execute(sqlalchemy.text(s))
 
     now = datetime.datetime.now(datetime.timezone.utc)
@@ -570,20 +568,20 @@ def main():
 
 
     if args.sql_post:
-        args.sql_post=textwrap.dedent(args.sql_post)
-        meta_script = jinja2.Template(args.sql_post)
-        script=meta_script.render(
-            tables=tables.tables
-        )
+        script = jinja2.Template(args.sql_post).render(tables=tables.tables)
 
-        if args.sql_split_char:
+        if args.sql_split_char and args.sql_split_char in script:
             script=[s for s in (s.strip() for s in script.split(args.sql_split_char)) if s]
+        else:
+        	script=[script]
 
         with db.begin() as db_connection:
             for s in script:
-                logger.debug(f"Run post SQL command: {' '.join(s.split())}")
-                db_connection.execute(sqlalchemy.text(s))
+                ss=' '.join(s.split())
+                logger.debug(f"Run post ETL SQL command: {ss}")
+                db_connection.execute(sqlalchemy.text(ss))
 
+        db.dispose()
 
 
 if __name__ == "__main__":
