@@ -137,7 +137,7 @@ When you are happy with results in your DB, enable the scheduler:
 systemctl --user enable --now gsheetstables.timer
 ```
 ## Table Foreign Keys
-Here is an example where foreign keys will defined for each table after the ETL:
+Here is an example where foreign keys will be defined for each table after the ETL:
 
 ```shell
 gsheetstables2db \
