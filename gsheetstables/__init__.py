@@ -11,7 +11,7 @@ import google.oauth2.service_account
 import googleapiclient.discovery
 import googleapiclient.errors
 
-__version__="3.1.4"
+__version__="3.1.5"
 
 class GSheetsTables():
     def __init__(self, gsheetid, service_account=None, private_key=None, service_account_file=None, column_rename_map=None, slugify=True):
