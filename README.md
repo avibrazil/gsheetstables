@@ -260,18 +260,23 @@ number:
 ```python
 tables.t('products').loc[1034]
 ```
-Another example using data and time columns:
+There is also:
+```python
+tables.p('products')
+```
+Which returns a `dict()` of table properties as reported by Google Sheets API.
 
+## Handling Date and Time
+Consider this:
 ```python
 tables.t('clients')
 ```
-| ID | Name          | birthdate | affiliated |
-|----|---------------|------------------------------------|----------------------------------------|
-| 1  | Alice Silva   | 1990-05-12T00:00:00-03:00           | 2021-03-15T10:45:00-03:00               |
-| 2  | Bruno Costa   | 1985-11-23T00:00:00-03:00           | 2019-08-02T14:20:00-03:00               |
-| 3  | Carla Mendes | 1998-02-07T00:00:00-03:00           | 2022-01-10T09:00:00-03:00               |
-| 4  | Daniel Rocha | 1976-09-30T00:00:00-03:00           | 2015-06-25T16:35:00-03:00               |
-
+| ID | Name          | birthdate                  | affiliated                  |
+|----|---------------|----------------------------|-----------------------------|
+| 1  | Alice Silva   | 1990-05-12T00:00:00-03:00  | 2021-03-15T10:45:00-03:00   |
+| 2  | Bruno Costa   | 1985-11-23T00:00:00-03:00  | 2019-08-02T14:20:00-03:00   |
+| 3  | Carla Mendes  | 1998-02-07T00:00:00-03:00  | 2022-01-10T09:00:00-03:00   |
+| 4  | Daniel Rocha  | 1976-09-30T00:00:00-03:00  | 2015-06-25T16:35:00-03:00   |
 
 Notice that Google Sheets Table columns of type `DATE` (which may contain also time) will be converted to `pandas.Timestamp`s and the spreadsheet timezone will be associated to it, aiming at minimum loss of data.
 If you want just naive dates, as they are probably formated in your sheets, use Pandas like this:
@@ -308,8 +313,9 @@ Data processing must always, ALWAYS, consider and handle time and timezone.
 
 People that edit spreadsheets can get creative when naming columns.
 Pass `slugify=True` (the default) to:
-- transliterate accents and international characters with unidecode
-- convert spaces, `/`, `:` to `_`
+- transliterate accents and international characters with [Unidecode](https://pypi.org/project/Unidecode/)
+- convert `/`, `:`, `#`, `<`, `>`, and spaces to `_`
+- remove `?`, `!`, `"`, `'`
 - lowercase all characters
 
 So a column named `Column with strange chars/letters` will become `column_with_strange_chars_letters`.

@@ -244,12 +244,30 @@ class GSheetsTables():
 
 
     def slugification(name):
+        """
+        - transliterate accents and international characters with [Unidecode](https://pypi.org/project/Unidecode/)
+        - convert `/`, `:`, `#`, `<`, `>`, and spaces to `_`
+        - remove `?`, `!`, `"`, `'`
+        - lowercase all characters
+        """
         return (
             unidecode.unidecode(name)
+
+            # Chars to `_`
             .replace('/'  , '_')
             .replace(': ' , '_')
-            .replace(':'  , '_')
+            .replace('#'  , '_')
+            .replace('<'  , '_')
+            .replace('>'  , '_')
             .replace(' '  , '_')
+
+            # Delete chars
+            .replace('?'  , '')
+            .replace('!'  , '')
+            .replace('"'  , '')
+            .replace("'"  , '')
+
+            # Lowercase
             .lower()
         )
 
