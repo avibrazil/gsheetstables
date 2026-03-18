@@ -137,12 +137,14 @@ When you are happy with results in your DB, enable the scheduler:
 systemctl --user enable --now gsheetstables.timer
 ```
 ## Table Foreign Keys
-Here is an example where foreign keys will be defined for each table after the ETL:
+Here is an example with foreign keys.
+They will be defined for each table after the ETL, and, to avoid problems during
+data copy, the `--sql-pre` script removes temporarily the FKs and unique indices.
 
 ```shell
 gsheetstables2db \
     --db postgresql+psycopg:///business_intelligence \
-    --sql-post "
+    --sql-pre "
         {%
             set foreign_keys = dict(
                 sales = dict(
@@ -155,8 +157,34 @@ gsheetstables2db \
             )
         %}
 
+        {% for table, fks in foreign_keys.items() %}
+            {% for fk, target in fks.items() %}
+                DO $$$$
+                BEGIN
+					ALTER TABLE {{table}}
+					DROP CONSTRAINT IF EXISTS fk_table_{{table}}_column_{{fk}};
+                END $$$$; §
+            {% endfor %}
+        {% endfor %}
+
+		DROP INDEX IF EXISTS idx_product_id;
+		DROP INDEX IF EXISTS idx_client_id;
+    " \
+    --sql-post "
         CREATE UNIQUE INDEX IF NOT EXISTS idx_client_id  ON client  (id); §
         CREATE UNIQUE INDEX IF NOT EXISTS idx_product_id ON product (id); §
+
+        {%
+            set foreign_keys = dict(
+                sales = dict(
+                    id_client = 'client(id)',
+                    id_product = 'product(id)'
+                ),
+                client_addresses = dict(
+                    id_client = 'client(id)'
+                ),
+            )
+        %}
 
         {% for table, fks in foreign_keys.items() %}
             {% for fk, target in fks.items() %}
