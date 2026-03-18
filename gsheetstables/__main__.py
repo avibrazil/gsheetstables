@@ -140,7 +140,7 @@ def prepare_args():
         dest='sql_pre',
         required=False,
         default=None,
-        help='SQL script to execute before writing tables to DB. Can be a Jinja template. In case of multi-line script, use the char at --sql-split-char to separate each query.'
+        help='SQL script to execute before writing tables to DB. Can be a Jinja template. In case of multi-line script, use the char at --sql-split-char to separate each query. SQL pre, post and actual ETL happen in one single transaction.'
     )
 
     parser.add_argument(
@@ -148,7 +148,7 @@ def prepare_args():
         dest='sql_post',
         required=False,
         default=None,
-        help='SQL script to execute after writing tables to DB. Can be a Jinja template. In case of multi-line script, use the char at --sql-split-char to separate each query.'
+        help='SQL script to execute after writing tables to DB. Can be a Jinja template. In case of multi-line script, use the char at --sql-split-char to separate each query. SQL pre, post and actual ETL happen in one single transaction.'
     )
 
     parser.add_argument(
@@ -329,83 +329,73 @@ def main():
     # 7. Cleanup old data from tables, in case of appending
     # 8. Run sql_post script
 
-    if args.sql_pre:
-        script = jinja2.Template(args.sql_pre).render(tables=tables.tables)
+    with db.begin() as db_connection:
+        if args.sql_pre:
+            script = jinja2.Template(args.sql_pre).render(tables=tables.tables)
 
-        if args.sql_split_char and args.sql_split_char in script:
-        	# Script has multiple commands
-            script=[s for s in (s.strip() for s in script.split(args.sql_split_char)) if s]
-        else:
-        	# Script is only 1 command
-        	script=[script]
+            if args.sql_split_char and args.sql_split_char in script:
+            	# Script has multiple commands
+                script=[s for s in (s.strip() for s in script.split(args.sql_split_char)) if s]
+            else:
+            	# Script is only 1 command
+            	script=[script]
 
-        with db.begin() as db_connection:
             for s in script:
                 ss=' '.join(s.split())
                 logger.debug(f"Run pre ETL SQL command: {ss}")
                 db_connection.execute(sqlalchemy.text(s))
 
-    now = datetime.datetime.now(datetime.timezone.utc)
-    textual_db_schema=f"{args.db_schema}." if args.db_schema else ''
+        now = datetime.datetime.now(datetime.timezone.utc)
+        textual_db_schema=f"{args.db_schema}." if args.db_schema else ''
 
 
-    for table in tables.tables:
-        logger.debug(f"DB table update logic for {table}...")
+        for table in tables.tables:
+            logger.debug(f"DB table update logic for {table}...")
 
-        final_table = f"{args.table_prefix}{table}"
-        table_exists = None  # don't know yet
+            final_table = f"{args.table_prefix}{table}"
 
-        # Check if table in DB needs an update by comparing DB’s table
-        # timestamps and spreadsheet last modification time.
-        if tables.modification_time:
-
-            versions_query = (
-                sqlalchemy.text(
-                    textwrap.dedent(f"""\
-                        SELECT DISTINCT _gsheet_utc_timestamp
-                        FROM {textual_db_schema}{final_table}
-                        WHERE _gsheet_utc_timestamp >= :modification_time"""
-                    )
-                )
-                .bindparams(modification_time=tables.modification_time.replace(microsecond=0))
-                .compile(
-                    dialect=db.dialect,
-                    compile_kwargs=dict(literal_binds=True)
+            table_exists = (
+                sqlalchemy.inspect(db_connection)
+                .has_table(
+                    table_name = final_table,
+                    schema     = args.db_schema
                 )
             )
-
-            logger.debug(f"Checking if {table} requires update with query: {versions_query}")
-
-            with db.begin() as db_connection:
-                try:
-                    versions = pandas.read_sql_query(versions_query, con=db_connection)
-                    if len(versions) > 0:
-                        # DB already has data with timestamp equal or more
-                        # recent than the spreadsheet last modification time.
-
-                        logger.info(f"Table {table} doesn‘t need update in DB.")
-
-                        continue
-                    else:
-                        logger.info(f"Table {table} will get new data in DB.")
-                        table_exists=True
-
-                except (sqlalchemy.exc.ProgrammingError, sqlalchemy.exc.OperationalError):
-                    logger.warning(f"Can’t check if table {table} requires a DB update; seems it doesn’t exist in database, so creating anyway. You should worry if you see this warning again and again in the future.")
-                    table_exists=False
-
-        with db.begin() as db_connection:
-            if table_exists is None:
-                table_exists = (
-                    sqlalchemy.inspect(db_connection)
-                    .has_table(
-                        table_name = final_table,
-                        schema     = args.db_schema
-                    )
-                )
-                logger.debug(f"Check if target «{textual_db_schema}{final_table}» exists for {table}: {table_exists}")
+            logger.debug(f"Check if target «{textual_db_schema}{final_table}» exists for {table}: {table_exists}")
 
             target_table=f'{final_table}___tmp_' if table_exists else final_table
+
+            # Check if table in DB needs an update by comparing DB’s table
+            # timestamps and spreadsheet last modification time.
+            if tables.modification_time and table_exists:
+
+                versions_query = (
+                    sqlalchemy.text(
+                        textwrap.dedent(f"""\
+                            SELECT DISTINCT _gsheet_utc_timestamp
+                            FROM {textual_db_schema}{final_table}
+                            WHERE _gsheet_utc_timestamp >= :modification_time"""
+                        )
+                    )
+                    .bindparams(modification_time=tables.modification_time.replace(microsecond=0))
+                    .compile(
+                        dialect=db.dialect,
+                        compile_kwargs=dict(literal_binds=True)
+                    )
+                )
+
+                logger.debug(f"Checking if {table} requires update with query: {versions_query}")
+
+                versions = pandas.read_sql_query(versions_query, con=db_connection)
+                if len(versions) > 0:
+                    # DB already has data with timestamp equal or more
+                    # recent than the spreadsheet last modification time.
+
+                    logger.info(f"Table {table} doesn‘t need update in DB.")
+
+                    continue
+                else:
+                    logger.info(f"Table {table} will get new data in DB.")
 
             df = tables.t(table)
 
@@ -566,22 +556,20 @@ def main():
                         dict(time = oldest)
                     )
 
+        if args.sql_post:
+            script = jinja2.Template(args.sql_post).render(tables=tables.tables)
 
-    if args.sql_post:
-        script = jinja2.Template(args.sql_post).render(tables=tables.tables)
+            if args.sql_split_char and args.sql_split_char in script:
+                script=[s for s in (s.strip() for s in script.split(args.sql_split_char)) if s]
+            else:
+                script=[script]
 
-        if args.sql_split_char and args.sql_split_char in script:
-            script=[s for s in (s.strip() for s in script.split(args.sql_split_char)) if s]
-        else:
-        	script=[script]
-
-        with db.begin() as db_connection:
             for s in script:
                 ss=' '.join(s.split())
                 logger.debug(f"Run post ETL SQL command: {ss}")
                 db_connection.execute(sqlalchemy.text(ss))
 
-        db.dispose()
+    db.dispose()
 
 
 if __name__ == "__main__":
