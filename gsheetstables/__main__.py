@@ -21,6 +21,7 @@ import jinja2
 import pandas
 import gsheetstables
 
+
 default_identity_file = pathlib.Path.home() / 'service_account.json'
 
 def prepare_logging(verbose: int):
@@ -329,6 +330,8 @@ def main():
     # 7. Cleanup old data from tables, in case of appending
     # 8. Run sql_post script
 
+    timestamp_col='_gsheet_utc_timestamp'
+
     with db.begin() as db_connection:
         if args.sql_pre:
             script = jinja2.Template(args.sql_pre).render(tables=tables.tables)
@@ -372,9 +375,9 @@ def main():
                 versions_query = (
                     sqlalchemy.text(
                         textwrap.dedent(f"""\
-                            SELECT DISTINCT _gsheet_utc_timestamp
+                            SELECT DISTINCT {timestamp_col}
                             FROM {textual_db_schema}{final_table}
-                            WHERE _gsheet_utc_timestamp >= :modification_time"""
+                            WHERE {timestamp_col} >= :modification_time"""
                         )
                     )
                     .bindparams(modification_time=tables.modification_time.replace(microsecond=0))
@@ -412,13 +415,18 @@ def main():
             # data comparison, or as the final table
             for i in range(0, len(df), page_size):
                 logger.debug(f"{target_table}: chunk {i}:{page_size + i}")
+
+                control_cols = [timestamp_col,gsheetstables.GSheetsTables.row_col]
+
                 (
                     df
 
+                    # Current page (relevant only on large tables)
                     .iloc[i:page_size+i]
 
-                    .assign(
-                        _gsheet_utc_timestamp = (
+                    # Add the timestamp column
+                    .assign(**{
+                        timestamp_col: (
                             (
                                 tables.modification_time
                                 .astimezone(datetime.timezone.utc)
@@ -426,15 +434,23 @@ def main():
                             if tables.modification_time
                             else now
                         ).replace(microsecond=0)
-                    )
+                    })
 
+                    # Make index (_gsheet_row) a regular column for better control
+                    .reset_index(drop=False)
+
+                    # Get final columns in correct order, with control columns
+                    # in the begining
+                    [control_cols + [c for c in df.columns if c not in control_cols]]
+
+                    # Write to database, finally
                     .to_sql(
                         target_table,
                         schema=args.db_schema,
                         if_exists='append',
                         method='multi',
                         con=db_connection,
-                        index=True
+                        index=False
                     )
                 )
 
@@ -446,7 +462,7 @@ def main():
                 col_compare = ' OR '.join([
                     f"current.{c} <> {target_table}.{c}"
                     for c in tables.t(table).columns
-                    if c not in {'_gsheet_row'}
+                    if c not in {gsheetstables.GSheetsTables.row_col}
                 ])
 
                 # If the following query returns more than zero lines, table
@@ -457,25 +473,25 @@ def main():
                     WITH current AS (
                         SELECT *
                         FROM {textual_db_schema}{final_table}
-                        WHERE _gsheet_utc_timestamp = (
-                            SELECT MAX(_gsheet_utc_timestamp)
+                        WHERE {timestamp_col} = (
+                            SELECT MAX({timestamp_col})
                             FROM {textual_db_schema}{final_table}
                         )
                     ),
                     diff_left AS (
-                        SELECT current._gsheet_row
+                        SELECT current.{gsheetstables.GSheetsTables.row_col}
                         FROM current
                         LEFT JOIN {textual_db_schema}{target_table}
-                        ON current._gsheet_row = {textual_db_schema}{target_table}._gsheet_row
-                        WHERE {textual_db_schema}{target_table}._gsheet_row is NULL OR {col_compare}
+                        ON current.{gsheetstables.GSheetsTables.row_col} = {textual_db_schema}{target_table}.{gsheetstables.GSheetsTables.row_col}
+                        WHERE {textual_db_schema}{target_table}.{gsheetstables.GSheetsTables.row_col} is NULL OR {col_compare}
                         LIMIT 1
                     ),
                     diff_right AS (
-                        SELECT {textual_db_schema}{target_table}._gsheet_row
+                        SELECT {textual_db_schema}{target_table}.{gsheetstables.GSheetsTables.row_col}
                         FROM current
                         RIGHT JOIN {textual_db_schema}{target_table}
-                        ON current._gsheet_row = {textual_db_schema}{target_table}._gsheet_row
-                        WHERE current._gsheet_row is NULL OR {col_compare}
+                        ON current.{gsheetstables.GSheetsTables.row_col} = {textual_db_schema}{target_table}.{gsheetstables.GSheetsTables.row_col}
+                        WHERE current.{gsheetstables.GSheetsTables.row_col} is NULL OR {col_compare}
                         LIMIT 1
                     )
                     SELECT *
@@ -521,13 +537,13 @@ def main():
                     sql=textwrap.dedent(f"""
                         WITH
                             too_old AS (
-                                SELECT DISTINCT _gsheet_utc_timestamp
+                                SELECT DISTINCT {timestamp_col}
                                 FROM {textual_db_schema}{final_table}
-                                ORDER BY _gsheet_utc_timestamp DESC
+                                ORDER BY {timestamp_col} DESC
                                 LIMIT {args.nsnapshots}
                                 OFFSET {args.nsnapshots}
                             )
-                        SELECT _gsheet_utc_timestamp
+                        SELECT {timestamp_col}
                         FROM too_old
                         LIMIT 1
                     """)
@@ -550,7 +566,7 @@ def main():
                     db_connection.execute(
                         sqlalchemy.text(textwrap.dedent(f"""\
                             DELETE FROM {textual_db_schema}{final_table}
-                            WHERE _gsheet_utc_timestamp <= :time
+                            WHERE {timestamp_col} <= :time
                             """
                         )),
                         dict(time = oldest)

@@ -14,6 +14,8 @@ import googleapiclient.errors
 __version__="3.2"
 
 class GSheetsTables():
+    row_col='_gsheet_row'
+
     def __init__(self, gsheetid, service_account=None, private_key=None, service_account_file=None, column_rename_map=None, slugify=True):
         # Setup logging
         self.logger = logging.getLogger(__name__ + '.' + self.__class__.__name__)
@@ -182,7 +184,7 @@ class GSheetsTables():
                     columns=columns,
                     data=data_rows,
                     index=pandas.RangeIndex(
-                        name  = '_gsheet_row',
+                        name  = self.row_col,
                         start = self._t[i].raw_range.startRowIndex+2,
                         stop  = self._t[i].raw_range.startRowIndex+2 + len(data_rows),
                     )
