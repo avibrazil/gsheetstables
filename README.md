@@ -161,7 +161,7 @@ gsheetstables2db \
             {% for fk, target in fks.items() %}
                 DO $$$$
                 BEGIN
-					ALTER TABLE {{table}}
+					ALTER TABLE IF EXISTS {{table}}
 					DROP CONSTRAINT IF EXISTS fk_table_{{table}}_column_{{fk}};
                 END $$$$; §
             {% endfor %}
