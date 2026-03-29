@@ -600,13 +600,13 @@ def main():
 
     # Display some status
     if len(status.created)>0:
-        logger.warning("Tables created: "                  + ', '.join(status.created))
+        logger.warning("Tables created: 🧮"                  + ', 🧮'.join(status.created))
     if len(status.updated)>0:
-        logger.warning("Tables updated: "                  + ', '.join(status.updated))
+        logger.warning("Tables updated: 🧮"                  + ', 🧮'.join(status.updated))
     if len(status.unchanged)>0:
-        logger.info("Tables unchanged: "                   + ', '.join(status.unchanged))
+        logger.info("Tables unchanged: 🧮"                   + ', 🧮'.join(status.unchanged))
     if len(status.old_purge)>0:
-        logger.warning("Tables freed of old records: "     + ', '.join(status.old_purge))
+        logger.warning("Tables freed of old records: 🧮"     + ', 🧮'.join(status.old_purge))
 
 
 if __name__ == "__main__":
