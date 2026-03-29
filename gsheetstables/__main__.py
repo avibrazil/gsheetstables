@@ -15,6 +15,7 @@ import logging
 import base64
 import json
 
+import dotmap
 import cryptography.hazmat.primitives.serialization
 import sqlalchemy
 import jinja2
@@ -332,6 +333,13 @@ def main():
 
     timestamp_col='_gsheet_utc_timestamp'
 
+    status = dotmap.DotMap(
+        created     = [],
+        updated     = [],
+        unchanged   = [],
+        old_purge   = [],
+    )
+
     with db.begin() as db_connection:
         if args.sql_pre:
             script = jinja2.Template(args.sql_pre).render(tables=tables.tables)
@@ -394,11 +402,13 @@ def main():
                     # DB already has data with timestamp equal or more
                     # recent than the spreadsheet last modification time.
 
-                    logger.info(f"Table {table} doesn‘t need update in DB.")
+                    status.unchanged.append(table)
+
+                    logger.debug(f"Table {table} doesn‘t need update in DB.")
 
                     continue
                 else:
-                    logger.info(f"Table {table} will get new data in DB.")
+                    logger.debug(f"Table {table} might have new data; row by row comparison triggered.")
 
             df = tables.t(table)
 
@@ -407,9 +417,9 @@ def main():
             page_size = math.floor(df.shape[0] / pages)+1
 
             if pages == 1:
-                logger.info(f"Write table data initially to {target_table}, all data at once.")
+                logger.debug(f"Write table data initially to {target_table}, all data at once.")
             else:
-                logger.info(f"Write table data initially to {target_table}, {pages} page(s) of {page_size} rows each.")
+                logger.debug(f"Write table data initially to {target_table}, {pages} page(s) of {page_size} rows each.")
 
             # Write DataFrame to DB, either as a temporary table suited for
             # data comparison, or as the final table
@@ -456,9 +466,6 @@ def main():
 
             # Check if data really changed
             if table_exists is True:
-
-                logger.debug(f"Compare new data with last snapshot")
-
                 col_compare = ' OR '.join([
                     f"current.{c} <> {target_table}.{c}"
                     for c in tables.t(table).columns
@@ -506,6 +513,7 @@ def main():
                     # Data of this scpecific table has changed, append to main
                     # table.
 
+                    status.updated.append(table)
                     logger.debug(f"Detected change in data; updating {final_table}")
 
                     db_connection.execute(
@@ -515,6 +523,7 @@ def main():
                         """))
                     )
                 else:
+                    status.unchanged.append(table)
                     logger.debug(f"Data for table {final_table} didn't change; not updating")
 
                 logger.debug(f"Drop auxiliary table {target_table}")
@@ -558,6 +567,8 @@ def main():
                         .replace(tzinfo=datetime.timezone.utc)
                     )
 
+                    status.old_purge.append(table)
+
                     logger.debug(
                         "Delete anything older than last allowed snapshot: ",
                         oldest
@@ -586,6 +597,16 @@ def main():
                 db_connection.execute(sqlalchemy.text(ss))
 
     db.dispose()
+
+    # Display some status
+    if len(status.created)>0:
+        logger.warning("Tables created: "                  + ', '.join(status.created))
+    if len(status.updated)>0:
+        logger.warning("Tables updated: "                  + ', '.join(status.updated))
+    if len(status.unchanged)>0:
+        logger.info("Tables unchanged: "                   + ', '.join(status.unchanged))
+    if len(status.old_purge)>0:
+        logger.warning("Tables freed of old records: "     + ', '.join(status.old_purge))
 
 
 if __name__ == "__main__":
