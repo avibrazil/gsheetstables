@@ -333,6 +333,11 @@ def main():
 
     timestamp_col='_gsheet_utc_timestamp'
 
+    is_distinct_SQL_operator = dict(
+        postgresql = 'IS DISTINCT FROM',
+        mysql = '<=>',
+    )
+
     status = dotmap.DotMap(
         created     = [],
         updated     = [],
@@ -466,11 +471,33 @@ def main():
 
             # Check if data really changed
             if table_exists is True:
-                col_compare = ' OR '.join([
-                    f"current.{c} <> {target_table}.{c}"
-                    for c in tables.t(table).columns
-                    if c not in {gsheetstables.GSheetsTables.row_col}
-                ])
+                if db_connection.dialect.name in is_distinct_SQL_operator.keys():
+                    col_compare = ' OR '.join([
+                        "(current.{column} {operator} {target}.{column})".format(
+                            column=c,
+                            target=target_table,
+                            operator=is_distinct_SQL_operator[db_connection.dialect.name]
+                        )
+                        for c in tables.t(table).columns
+                        if c not in {gsheetstables.GSheetsTables.row_col}
+                    ])
+                else:
+                    # Database doesn’t have “IS DISTINCT FROM” operator, so safe
+                    # comparison is a bit more complex, to handle NULL
+                    col_compare = ' OR '.join([
+                        (
+                            "(" +
+                                "(current.{column}             <>  {target}.{column}            ) OR " +
+                                "(current.{column} IS     NULL AND {target}.{column} IS NOT NULL) OR " +
+                                "(current.{column} IS NOT NULL AND {target}.{column} IS     NULL)"     +
+                            ")"
+                        ).format(
+                            column=c,
+                            target=target_table,
+                        )
+                        for c in tables.t(table).columns
+                        if c not in {gsheetstables.GSheetsTables.row_col}
+                    ])
 
                 # If the following query returns more than zero lines, table
                 # has changed and requires update.
@@ -528,9 +555,9 @@ def main():
 
                 logger.debug(f"Drop auxiliary table {target_table}")
                 db_connection.execute(
-                    sqlalchemy.text(textwrap.dedent(f"""\
-                        DROP TABLE {textual_db_schema}{target_table}
-                    """))
+                   sqlalchemy.text(textwrap.dedent(f"""\
+                       DROP TABLE {textual_db_schema}{target_table}
+                   """))
                 )
 
             # Delete old table snapshots, keep only args.nsnapshots
@@ -570,8 +597,7 @@ def main():
                     status.old_purge.append(table)
 
                     logger.debug(
-                        "Delete anything older than last allowed snapshot: ",
-                        oldest
+                        f"Delete anything older than last allowed snapshot: {oldest}"
                     )
 
                     db_connection.execute(
