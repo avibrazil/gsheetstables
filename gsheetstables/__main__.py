@@ -543,10 +543,15 @@ def main():
                     status.updated.append(table)
                     logger.debug(f"Detected change in data; updating {final_table}")
 
+                    cols=', '.join(
+                        list(tables.t(table).columns) +
+                        [gsheetstables.GSheetsTables.row_col,timestamp_col]
+                    )
+
                     db_connection.execute(
                         sqlalchemy.text(textwrap.dedent(f"""\
-                            INSERT INTO {textual_db_schema}{final_table}
-                            SELECT * FROM {textual_db_schema}{target_table}
+                            INSERT INTO {textual_db_schema}{final_table} ({cols})
+                            SELECT {cols} FROM {textual_db_schema}{target_table}
                         """))
                     )
                 else:
