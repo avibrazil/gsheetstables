@@ -38,7 +38,7 @@ def prepare_logging(verbose: int):
     )
 
     loggers=[
-        # logging.getLogger(__name__),
+        logging.getLogger(__name__),
         logging.getLogger('gsheetstables'),
     ]
 
@@ -277,6 +277,52 @@ def decode_identity(payload):
     )
 
 
+def chunked_table_write(df,db,schema,target_table,chunk_size=45000):
+    """
+    Works through a SQLAlchemy or PsycoPG or PostgreSQL INSERT limitation.
+    Write the DataFrame to DB in chunks
+
+    chunk_size is number of data cells, not number of rows. So wide tables with
+    large number of columns will also benefit.
+
+    The default of 45000 was tested with SQLite and PostgreSQL, and is close to
+    the largest number that doesn't break the INSERT.
+
+    Use it like: df.pipe(chunked_table_write, [function parameters])
+
+    Returns the original table in df.
+    """
+    pages     = math.ceil((df.shape[0] * df.shape[1]) / chunk_size)
+    page_size = math.floor(df.shape[0] / pages)+1
+
+    if pages == 1:
+        logger.debug(f"Write table data initially to {target_table}, all data at once.")
+    else:
+        logger.debug(f"Write table data initially to {target_table}, {pages} page(s) of {page_size} rows each.")
+
+    for i in range(0, len(df), page_size):
+        logger.debug(f"{target_table}: chunk {i}:{page_size + i}")
+
+        (
+            df
+
+            # Current page
+            .iloc[i:page_size+i]
+
+            # Write to database, finally
+            .to_sql(
+                target_table,
+                schema         = schema,
+                if_exists      = 'append',
+                method         = 'multi',
+                con            = db,
+                index          = False
+            )
+        )
+
+    return df
+
+
 def main():
     # Read environment and command line parameters
     args=prepare_args()
@@ -366,7 +412,7 @@ def main():
 
 
         for table in tables.tables:
-            logger.debug(f"DB table update logic for {table}...")
+            logger.debug(f"Update logic for DB table {table}...")
 
             final_table = f"{args.table_prefix}{table}"
 
@@ -415,59 +461,44 @@ def main():
                 else:
                     logger.debug(f"Table {table} might have new data; row by row comparison triggered.")
 
-            df = tables.t(table)
+            # Prepare table data to be written to DB
+            control_cols = [timestamp_col, gsheetstables.GSheetsTables.row_col]
 
-            # Work through a SQLAlchemy or PsycoPG or PostgreSQL INSERT limitation
-            pages     = math.ceil((df.shape[0] * df.shape[1]) / 65000)
-            page_size = math.floor(df.shape[0] / pages)+1
+            (
+                tables.t(table)
 
-            if pages == 1:
-                logger.debug(f"Write table data initially to {target_table}, all data at once.")
-            else:
-                logger.debug(f"Write table data initially to {target_table}, {pages} page(s) of {page_size} rows each.")
+                # Add the timestamp column
+                .assign(**{
+                    timestamp_col: (
+                        (
+                            tables.modification_time
+                            .astimezone(datetime.timezone.utc)
+                        )
+                        if tables.modification_time
+                        else now
+                    ).replace(microsecond=0)
+                })
 
-            # Write DataFrame to DB, either as a temporary table suited for
-            # data comparison, or as the final table
-            for i in range(0, len(df), page_size):
-                logger.debug(f"{target_table}: chunk {i}:{page_size + i}")
+                # Make index (_gsheet_row) a regular column for better control
+                .reset_index(drop=False)
 
-                control_cols = [timestamp_col,gsheetstables.GSheetsTables.row_col]
-
-                (
-                    df
-
-                    # Current page (relevant only on large tables)
-                    .iloc[i:page_size+i]
-
-                    # Add the timestamp column
-                    .assign(**{
-                        timestamp_col: (
-                            (
-                                tables.modification_time
-                                .astimezone(datetime.timezone.utc)
-                            )
-                            if tables.modification_time
-                            else now
-                        ).replace(microsecond=0)
-                    })
-
-                    # Make index (_gsheet_row) a regular column for better control
-                    .reset_index(drop=False)
-
-                    # Get final columns in correct order, with control columns
-                    # in the begining
-                    [control_cols + [c for c in df.columns if c not in control_cols]]
-
-                    # Write to database, finally
-                    .to_sql(
-                        target_table,
-                        schema=args.db_schema,
-                        if_exists='append',
-                        method='multi',
-                        con=db_connection,
-                        index=False
-                    )
+                # Get final columns in correct order, with control columns
+                # in the begining
+                .pipe(
+                    lambda table:
+                        table[
+                            control_cols +
+                            [c for c in table.columns if c not in control_cols]
+                        ]
                 )
+
+                .pipe(
+                    chunked_table_write,
+                    db                     = db_connection,
+                    schema                 = args.db_schema,
+                    target_table           = target_table
+                )
+            )
 
             # Check if data really changed
             if table_exists is True:
