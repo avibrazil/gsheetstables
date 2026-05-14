@@ -323,6 +323,35 @@ def chunked_table_write(df,db,schema,target_table,chunk_size=45000):
     return df
 
 
+def sql_script_from_cli(script,sql_split_char,tables,db,name):
+    """
+    Program can get a full SQL script as CLI argument to pre or post process.
+    This function handles this text as it comes from CLI, replaces variables
+    with Jinja, breaks it multiple SQL commands/queries and executes one by one.
+    """
+
+    if script:
+        rendered = jinja2.Template(script).render(tables=tables.tables)
+
+        if sql_split_char and sql_split_char in rendered:
+            # Script has multiple commands
+            rendered=[
+                s1
+                for s1 in (
+                    s2.strip()
+                    for s2 in rendered.split(sql_split_char)
+                ) if s1
+            ]
+        else:
+            # Script is only 1 command
+            rendered=[rendered]
+
+        for s in rendered:
+            ss=' '.join(s.split())
+            logger.debug(f"{name}; Computed SQL command: {ss}")
+            db.execute(sqlalchemy.text(s))
+
+
 def main():
     # Read environment and command line parameters
     args=prepare_args()
@@ -392,20 +421,13 @@ def main():
     )
 
     with db.begin() as db_connection:
-        if args.sql_pre:
-            script = jinja2.Template(args.sql_pre).render(tables=tables.tables)
-
-            if args.sql_split_char and args.sql_split_char in script:
-            	# Script has multiple commands
-                script=[s for s in (s.strip() for s in script.split(args.sql_split_char)) if s]
-            else:
-            	# Script is only 1 command
-            	script=[script]
-
-            for s in script:
-                ss=' '.join(s.split())
-                logger.debug(f"Run pre ETL SQL command: {ss}")
-                db_connection.execute(sqlalchemy.text(s))
+        sql_script_from_cli(
+            script          = args.sql_pre,
+            sql_split_char  = args.sql_split_char,
+            tables          = tables,
+            db              = db_connection,
+            name            = "Pre ELT script"
+        )
 
         now = datetime.datetime.now(datetime.timezone.utc)
         textual_db_schema=f"{args.db_schema}." if args.db_schema else ''
@@ -645,18 +667,14 @@ def main():
                         dict(time = oldest)
                     )
 
-        if args.sql_post:
-            script = jinja2.Template(args.sql_post).render(tables=tables.tables)
+        sql_script_from_cli(
+            script          = args.sql_post,
+            sql_split_char  = args.sql_split_char,
+            tables          = tables,
+            db              = db_connection,
+            name            = "Post ELT script"
+        )
 
-            if args.sql_split_char and args.sql_split_char in script:
-                script=[s for s in (s.strip() for s in script.split(args.sql_split_char)) if s]
-            else:
-                script=[script]
-
-            for s in script:
-                ss=' '.join(s.split())
-                logger.debug(f"Run post ETL SQL command: {ss}")
-                db_connection.execute(sqlalchemy.text(ss))
 
     db.dispose()
 
