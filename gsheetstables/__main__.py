@@ -331,7 +331,10 @@ def sql_script_from_cli(script,sql_split_char,tables,db,name):
     """
 
     if script:
-        rendered = jinja2.Template(script).render(tables=tables.tables)
+        rendered = (
+            jinja2.Template(textwrap.dedent(script))
+            .render(tables=tables.tables)
+        )
 
         if sql_split_char and sql_split_char in rendered:
             # Script has multiple commands
