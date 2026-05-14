@@ -172,8 +172,15 @@ def prepare_args():
     return parser.parse_args()
 
 
-# A simplified function inspired by https://github.com/avibrazil/investorzilla/blob/main/investorzilla/datacache.py
 def get_db(db_url, echo=False):
+    """
+    Returns a SQLAlchemy DB engine already configured with some best practices
+    and connection pooling.
+
+    This is a simplified function inspired by
+    https://github.com/avibrazil/investorzilla/blob/main/investorzilla/datacache.py
+    """
+
     engine_config_sets=dict(
         # Documentation for all these SQLAlchemy pool control parameters:
         # https://docs.sqlalchemy.org/en/14/core/engines.html#engine-creation-api
@@ -355,6 +362,63 @@ def sql_script_from_cli(script,sql_split_char,tables,db,name):
             db.execute(sqlalchemy.text(s))
 
 
+def get_gsheet_tables(
+            gsheet,
+            service_account             = None,
+            service_account_private_key = None,
+            service_account_file        = None,
+            slugify                     = True,
+            col_rename                  = None,
+            show_encoded_identity       = False,
+            logger                      = logging.getLogger(__name__)
+        ):
+
+    # Prepare common parameters for gsheetstables.GSheetsTables() constructor
+    try:
+        params = dict(
+            gsheetid             = gsheet,
+            service_account      = service_account,
+            private_key          = decode_identity(service_account_private_key),
+            slugify              = slugify,
+            column_rename_map    = json.loads(col_rename) if col_rename else None
+        )
+    except json.decoder.JSONDecodeError as e:
+        # Be more verbose about the errors we control here
+        logger.error("Invalid JSON passed to --rename")
+        raise
+
+    if service_account is not None and service_account_private_key is not None:
+        # Authentication method 1: passed a service account plus private key
+        params['service_account']=service_account
+        params['private_key']=decode_identity(service_account_private_key)
+        try:
+            tables = gsheetstables.GSheetsTables(
+                gsheetid             = gsheet,
+                service_account      = service_account,
+                private_key          = decode_identity(service_account_private_key),
+                slugify              = slugify,
+                column_rename_map    = json.loads(col_rename) if col_rename else None
+            )
+        except json.decoder.JSONDecodeError as e:
+            logger.error("Invalid JSON passed to --rename")
+            raise
+
+    elif service_account_file is not None or default_identity_file.exists():
+        # Authentication method 2: passed a service account JSON file
+        identity=(service_account_file if service_account_file else default_identity_file)
+
+        if show_encoded_identity>=2:
+            encode_identity(identity, logger)
+
+        params['service_account_file']=identity
+
+    else:
+        logger.error("Either pass an identity file with -i or pure identity with -c and -m. Aborting.")
+        sys.exit(1)
+
+    return gsheetstables.GSheetsTables(**params)
+
+
 def main():
     # Read environment and command line parameters
     args=prepare_args()
@@ -363,40 +427,16 @@ def main():
     global logger
     logger=prepare_logging(args.verbose)
 
-    # Check how we are going to authenticate with Google
-    if args.service_account is not None and args.service_account_private_key is not None:
-        try:
-            tables = gsheetstables.GSheetsTables(
-                gsheetid             = args.gsheet,
-                service_account      = args.service_account,
-                private_key          = decode_identity(args.service_account_private_key),
-                slugify              = args.slugify,
-                column_rename_map    = json.loads(args.col_rename) if args.col_rename else None
-            )
-        except json.decoder.JSONDecodeError as e:
-            logger.error("Invalid JSON passed to --rename")
-            raise
-
-    elif args.service_account_file is not None or default_identity_file.exists():
-        identity=(args.service_account_file if args.service_account_file else default_identity_file)
-
-        if args.verbose>=2:
-            encode_identity(identity, logger)
-
-        try:
-            tables = gsheetstables.GSheetsTables(
-                gsheetid             = args.gsheet,
-                service_account_file = identity,
-                slugify              = args.slugify,
-                column_rename_map    = json.loads(args.col_rename) if args.col_rename else None
-            )
-        except json.decoder.JSONDecodeError as e:
-            logger.error("Invalid JSON passed to --rename")
-            raise
-
-    else:
-        logger.error("Either pass an identity file with -i or pure identity with -c and -m. Aborting.")
-        sys.exit(1)
+    tables = get_gsheet_tables(
+        gsheet                      = args.gsheet,
+        service_account             = args.service_account,
+        service_account_private_key = args.service_account_private_key,
+        service_account_file        = args.service_account_file,
+        slugify                     = args.slugify,
+        col_rename                  = args.col_rename,
+        show_encoded_identity       = (args.verbose>=2),
+        logger                      = logger
+    )
 
     db = get_db(args.db_url, args.verbose>0)
 
