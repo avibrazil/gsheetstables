@@ -210,8 +210,13 @@ class GSheetsTables():
                                         datetime.datetime(1899, 12, 30) +
                                         datetime.timedelta(days=serial)
                                     )
-                                    .replace(tzinfo=zoneinfo.ZoneInfo(spreadsheet.properties.timeZone))
-                                    if isinstance(serial, numbers.Number) and not pandas.isna(serial) else pandas.NaT
+                                    .replace(
+                                        tzinfo = zoneinfo.ZoneInfo(
+                                            spreadsheet.properties.timeZone
+                                        )
+                                    )
+                                    if isinstance(serial, numbers.Number) and not pandas.isna(serial)
+                                    else pandas.NaT
                                 )
                             )
                         )
@@ -291,7 +296,7 @@ class GSheetsTables():
 
 
 
-    def R1C1(trange):
-        return "R[{r.startRowIndex}]C[{r.startColumnIndex}]:R[{r.endRowIndex}]C[{r.endColumnIndex}]".format(r=trange)
+    def R1C1(t_range):
+        return "R[{r.startRowIndex}]C[{r.startColumnIndex}]:R[{r.endRowIndex}]C[{r.endColumnIndex}]".format(r=t_range)
 
 

@@ -284,7 +284,7 @@ def decode_identity(payload):
     )
 
 
-def chunked_table_write(df,db,schema,target_table,chunk_size=45000):
+def chunked_table_write(df,db,schema,target_table,chunk_size=32765):
     """
     Works through a SQLAlchemy or PsycoPG or PostgreSQL INSERT limitation.
     Write the DataFrame to DB in chunks
@@ -292,7 +292,7 @@ def chunked_table_write(df,db,schema,target_table,chunk_size=45000):
     chunk_size is number of data cells, not number of rows. So wide tables with
     large number of columns will also benefit.
 
-    The default of 45000 was tested with SQLite and PostgreSQL, and is close to
+    The default of 32765 was tested with SQLite and PostgreSQL, and is close to
     the largest number that doesn't break the INSERT.
 
     Use it like: df.pipe(chunked_table_write, [function parameters])
@@ -300,12 +300,12 @@ def chunked_table_write(df,db,schema,target_table,chunk_size=45000):
     Returns the original table in df.
     """
     pages     = math.ceil((df.shape[0] * df.shape[1]) / chunk_size)
-    page_size = math.floor(df.shape[0] / pages)+1
+    page_size = math.floor(df.shape[0] / pages) + 1
 
     if pages == 1:
         logger.debug(f"Write table data initially to {target_table}, all data at once.")
     else:
-        logger.debug(f"Write table data initially to {target_table}, {pages} page(s) of {page_size} rows each.")
+        logger.debug(f"Write table data initially to {target_table}, {pages} pages of {page_size} rows each.")
 
     for i in range(0, len(df), page_size):
         logger.debug(f"{target_table}: chunk {i}:{page_size + i}")
@@ -377,8 +377,6 @@ def get_gsheet_tables(
     try:
         params = dict(
             gsheetid             = gsheet,
-            service_account      = service_account,
-            private_key          = decode_identity(service_account_private_key),
             slugify              = slugify,
             column_rename_map    = json.loads(col_rename) if col_rename else None
         )
@@ -391,18 +389,6 @@ def get_gsheet_tables(
         # Authentication method 1: passed a service account plus private key
         params['service_account']=service_account
         params['private_key']=decode_identity(service_account_private_key)
-        try:
-            tables = gsheetstables.GSheetsTables(
-                gsheetid             = gsheet,
-                service_account      = service_account,
-                private_key          = decode_identity(service_account_private_key),
-                slugify              = slugify,
-                column_rename_map    = json.loads(col_rename) if col_rename else None
-            )
-        except json.decoder.JSONDecodeError as e:
-            logger.error("Invalid JSON passed to --rename")
-            raise
-
     elif service_account_file is not None or default_identity_file.exists():
         # Authentication method 2: passed a service account JSON file
         identity=(service_account_file if service_account_file else default_identity_file)
@@ -411,7 +397,6 @@ def get_gsheet_tables(
             encode_identity(identity, logger)
 
         params['service_account_file']=identity
-
     else:
         logger.error("Either pass an identity file with -i or pure identity with -c and -m. Aborting.")
         sys.exit(1)
@@ -420,6 +405,25 @@ def get_gsheet_tables(
 
 
 def main():
+    """
+    Many decisions to make about each table retrieved from the GSpreadsheet:
+
+    1.        Table already exists on DB?
+    1.1         Timestamp of GSheet is same as last write?
+    1.1.1         Skip all DB operations for this table
+    1.2         If column change detected
+    1.2.1         If not interested in snapshots, simply delete old table
+    1.2.2         If we are keeping data snapshots:
+    1.2.2.1         Rename old table including old time stamp in its name
+    1.2.2.2         Setup everything to continue as if it is a new table
+    2.        Write table do DB either as definitive table (new table) or auxiliary for further comparison
+    3.        If using auxliary table (old data already existed in DB)
+    3.1         Compare old and new (auxiliary) data row by row, cell by cell
+    3.2         If data changed append new data to current table
+    3.3         Delete auxiliary table
+    4.        Keep only {nsapshots} versions of data, purge old versions of data
+    """
+
     # Read environment and command line parameters
     args=prepare_args()
 
@@ -440,16 +444,8 @@ def main():
 
     db = get_db(args.db_url, args.verbose>0)
 
-    # 1. Run sql_pre script
-    # 2. Check if spreadhseet time is more recent than table snapshot in DB
-    # 3. Write data to auxiliary table
-    # 4. Compare last official snapshot with new data on auxiliary table
-    # 5. Append auxiliary table into target table with new timestamp
-    # 6. Drop auxiliary table
-    # 7. Cleanup old data from tables, in case of appending
-    # 8. Run sql_post script
-
     timestamp_col='_gsheet_utc_timestamp'
+    control_cols = [timestamp_col, gsheetstables.GSheetsTables.row_col]
 
     is_distinct_SQL_operator = dict(
         postgresql = 'IS DISTINCT FROM',
@@ -463,7 +459,9 @@ def main():
         old_purge   = [],
     )
 
-    with db.begin() as db_connection:
+    with db.connect() as db_connection:
+        db_connection.begin()
+
         sql_script_from_cli(
             script          = args.sql_pre,
             sql_split_char  = args.sql_split_char,
@@ -475,11 +473,15 @@ def main():
         now = datetime.datetime.now(datetime.timezone.utc)
         textual_db_schema=f"{args.db_schema}." if args.db_schema else ''
 
-
         for table in tables.tables:
             logger.debug(f"Update logic for DB table {table}...")
 
             final_table = f"{args.table_prefix}{table}"
+            current = f"{textual_db_schema}{final_table}"
+
+            # Define name of DB table where we are going to write data.
+            # Defaults to final table name, but this might change...
+            target_table = final_table
 
             table_exists = (
                 sqlalchemy.inspect(db_connection)
@@ -488,47 +490,124 @@ def main():
                     schema     = args.db_schema
                 )
             )
-            logger.debug(f"Check if target «{textual_db_schema}{final_table}» exists for {table}: {table_exists}")
-
-            target_table=f'{final_table}___tmp_' if table_exists else final_table
+            logger.debug(f"Check if target «{current}» exists for {table}: {table_exists}")
 
             # Check if table in DB needs an update by comparing DB’s table
             # timestamps and spreadsheet last modification time.
-            if tables.modification_time and table_exists:
+            if table_exists:
 
-                versions_query = (
+                current_table_layout_query = (
                     sqlalchemy.text(
                         textwrap.dedent(f"""\
-                            SELECT DISTINCT {timestamp_col}
-                            FROM {textual_db_schema}{final_table}
-                            WHERE {timestamp_col} >= :modification_time"""
+                            SELECT *
+                            FROM {current}
+                            ORDER BY {timestamp_col} DESC
+                            LIMIT 1
+                            """
                         )
                     )
-                    .bindparams(modification_time=tables.modification_time.replace(microsecond=0))
                     .compile(
                         dialect=db.dialect,
                         compile_kwargs=dict(literal_binds=True)
                     )
                 )
 
-                logger.debug(f"Checking if {table} requires update with query: {versions_query}")
+                logger.debug(f"Checking if {current} requires update with query: {current_table_layout_query}")
 
-                versions = pandas.read_sql_query(versions_query, con=db_connection)
-                if len(versions) > 0:
-                    # DB already has data with timestamp equal or more
-                    # recent than the spreadsheet last modification time.
+                current_table_layout = (
+                    pandas.read_sql_query(
+                        current_table_layout_query,
+                        con=db_connection
+                    )
+                    .assign(
+                        **{
+                            timestamp_col:
+                                lambda table: pandas.to_datetime(
+                                    table[timestamp_col],
+                                    utc=True
+                                )
+                        }
+                    )
+                )
+                current_table_timestamp=current_table_layout[timestamp_col].iloc[0]
 
-                    status.unchanged.append(table)
+                # Check if GSheet modification time has changed
+                if table_exists:
+                    logger.debug(f"GSheet time: {tables.modification_time}")
+                    logger.debug(f"DB table last timestamp: {current_table_timestamp}")
 
-                    logger.debug(f"Table {table} doesn‘t need update in DB.")
+                    if tables.modification_time.replace(microsecond=0) > current_table_timestamp:
+                        logger.debug(f"Spreadsheet was updated more recently than {current}; row by row comparison triggered.")
+                        target_table = f'{final_table}___tmp_'
+                    else:
+                        # DB already has data with timestamp equal or more
+                        # recent than the spreadsheet last modification time.
 
-                    continue
+                        status.unchanged.append(table)
+
+                        logger.debug(f"Table {current} doesn‘t need update in DB.")
+
+                        continue
                 else:
-                    logger.debug(f"Table {table} might have new data; row by row comparison triggered.")
+                    status.created.append(table)
+
+                # Check if GSheet table columns is different from previous
+                # version on DB
+                columns_in_only_one_table = (
+                    (
+                        # Compare columns of current and new table
+                        set(current_table_layout.columns) ^
+                        set(tables.t(table).columns)
+                    ) -
+                    # But exclude the control columns from comparison
+                    set(control_cols)
+                )
+
+                if len(columns_in_only_one_table)>0:
+                    # Current and new table have different columns.
+                    # Rename or delete current table
+
+                    logger.debug(f"Data layout for «{table}» changed; unmatched columns: {columns_in_only_one_table} ")
+
+                    if args.nsnapshots==1:
+                        # If we are not keeping historical data (nsnapshots==1),
+                        # don't bother to save previous data, simple delete it.
+                        logger.debug(f"Old data layout is incompatible with whats new. Delete it")
+                        db_connection.execute(
+                           sqlalchemy.text(f"DROP TABLE {current}")
+                        )
+                    else:
+                        # We are keeping historical data (nsnapshots!=1), but
+                        # whats new is incompatilbe, so rename current table
+                        # with a time tag
+                        new_name = "{current}__until_{timetag}".format(
+                            current     = current,
+                            timetag     = (
+                                current_table_timestamp
+                                .strftime("%Y%m%d%H%M%S")
+                            )
+                        )
+                        logger.warning(f"Old data for «{table}» will be moved to table «{new_name}» due to layout change")
+                        db_connection.execute(
+                           sqlalchemy.text(textwrap.dedent(f"""\
+                               ALTER TABLE {current}
+                               RENAME TO {new_name}
+                           """))
+                        )
+
+                    target_table = f'{final_table}'
+
+                    # From now on, act as there is no old data
+                    table_exists=False
+
+
+
+
+            # At this point we decided that data has to be written to DB. We
+            # also know if we need further data comparison (table_exists==True)
+            # or if written data is the final data (table_exists==False).
 
             # Prepare table data to be written to DB
-            control_cols = [timestamp_col, gsheetstables.GSheetsTables.row_col]
-
             (
                 tables.t(table)
 
@@ -565,8 +644,10 @@ def main():
                 )
             )
 
-            # Check if data really changed
-            if table_exists is True:
+            # Check if data really changed. This is the hard core data
+            # comparison, row by row, cell by cell, executed by the database
+            # engine.
+            if table_exists:
                 if db_connection.dialect.name in is_distinct_SQL_operator.keys():
                     col_compare = ' OR '.join([
                         "(current.{column} {operator} {target}.{column})".format(
@@ -598,7 +679,7 @@ def main():
                 # If the following query returns more than zero lines, table
                 # has changed and requires update.
                 # Query is a bit too complex to keep compatibility with all DBs,
-                # specially those that don’t support full outer join (MariaDB).
+                # specially those that don’t support FULL OUTER JOIN (MariaDB).
                 diff_query = textwrap.dedent(f"""\
                     WITH current AS (
                         SELECT *
@@ -631,7 +712,10 @@ def main():
                     FROM diff_right
                 """)
 
+                logger.debug(f"Compare tables data with query:\n{diff_query}")
+
                 diff = pandas.read_sql_query(diff_query, con=db_connection)
+
                 if len(diff) > 0:
                     # Data of this scpecific table has changed, append to main
                     # table.
@@ -671,7 +755,7 @@ def main():
                 # Discover the oldest allowed snapshot time
                 oldest = pandas.read_sql_query(
                     con=db_connection,
-                    sql=textwrap.dedent(f"""
+                    sql=textwrap.dedent(f"""\
                         WITH
                             too_old AS (
                                 SELECT DISTINCT {timestamp_col}
@@ -718,18 +802,28 @@ def main():
             name            = "Post ELT script"
         )
 
+        db_connection.commit()
 
-    db.dispose()
+
+    db.dispose() # End of database affairs
 
     # Display some status
     if len(status.created)>0:
-        logger.warning("Tables created: 🧮"                  + ', 🧮'.join(status.created))
+        logger.warning(
+                     "Tables (re)created: 🧮" + ', 🧮'.join(status.created)
+        )
     if len(status.updated)>0:
-        logger.warning("Tables updated: 🧮"                  + ', 🧮'.join(status.updated))
+        logger.warning(
+                         "Tables updated: 🧮" + ', 🧮'.join(status.updated)
+        )
     if len(status.unchanged)>0:
-        logger.info("Tables unchanged: 🧮"                   + ', 🧮'.join(status.unchanged))
+        logger.info(
+                       "Tables unchanged: 🧮" + ', 🧮'.join(status.unchanged)
+        )
     if len(status.old_purge)>0:
-        logger.warning("Tables freed of old records: 🧮"     + ', 🧮'.join(status.old_purge))
+        logger.warning(
+            "Tables freed of old records: 🧮" + ', 🧮'.join(status.old_purge)
+        )
 
 
 if __name__ == "__main__":
