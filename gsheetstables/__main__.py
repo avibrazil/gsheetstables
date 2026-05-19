@@ -471,7 +471,7 @@ def main():
         )
 
         now = datetime.datetime.now(datetime.timezone.utc)
-        textual_db_schema=f"{args.db_schema}." if args.db_schema else ''
+        textual_db_schema = f"{args.db_schema}." if args.db_schema else ''
 
         for table in tables.tables:
             logger.debug(f"Update logic for DB table {table}...")
@@ -580,20 +580,26 @@ def main():
                         # We are keeping historical data (nsnapshots!=1), but
                         # whats new is incompatilbe, so rename current table
                         # with a time tag
-                        new_name = "{current}__until_{timetag}".format(
-                            current     = current,
+
+                        new_name = "{final_table}__until_{timetag}".format(
+                            final_table = final_table,
                             timetag     = (
                                 current_table_timestamp
                                 .strftime("%Y%m%d%H%M%S")
                             )
                         )
+
+                        # Kinda portable table rename operation
+                        if db_connection.dialect.name == "mysql":
+                            sql = f"RENAME TABLE {current} TO {textual_db_schema}{new_name}"
+                        elif db_connection.dialect.name == "oracle":
+                            sql = f"RENAME {final_table} TO {new_name}"
+                        else:
+                            sql = f"ALTER TABLE {current} RENAME TO {new_name}"
+
                         logger.warning(f"Old data for «{table}» will be moved to table «{new_name}» due to layout change")
-                        db_connection.execute(
-                           sqlalchemy.text(textwrap.dedent(f"""\
-                               ALTER TABLE {current}
-                               RENAME TO {new_name}
-                           """))
-                        )
+
+                        db_connection.execute(sqlalchemy.text(sql))
 
                     target_table = f'{final_table}'
 

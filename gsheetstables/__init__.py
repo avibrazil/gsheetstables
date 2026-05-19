@@ -11,7 +11,7 @@ import google.oauth2.service_account
 import googleapiclient.discovery
 import googleapiclient.errors
 
-__version__="5.0"
+__version__="5.0.2"
 
 class GSheetsTables():
     row_col='_gsheet_row'
