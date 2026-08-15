@@ -162,6 +162,14 @@ def prepare_args():
     )
 
     parser.add_argument(
+        "--dump-table-structure",
+        dest='table_structure',
+        type=pathlib.Path,
+        default=None,
+        help='File name to dump the CREATE TABLE statements of all tables created'
+    )
+
+    parser.add_argument(
         '--verbose', '-v',
         dest='verbose',
         action="count",
@@ -798,6 +806,25 @@ def main():
                             """
                         )),
                         dict(time = oldest)
+                    )
+
+            if args.table_structure:
+                metadata = sqlalchemy.MetaData()
+
+                table = sqlalchemy.Table(
+                    f"{textual_db_schema}{final_table}",
+                    metadata,
+                    autoload_with=db_connection
+                )
+
+                with args.table_structure.open("a", encoding="utf-8") as f:
+                    f.write(
+                        str(
+                            sqlalchemy.schema
+                            .CreateTable(table)
+                            .compile(dialect=db_connection.dialect)
+                        )
+                        .rstrip('\n') + ';\n'
                     )
 
         sql_script_from_cli(
