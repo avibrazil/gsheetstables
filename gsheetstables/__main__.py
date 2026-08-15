@@ -808,24 +808,6 @@ def main():
                         dict(time = oldest)
                     )
 
-            if args.table_structure:
-                metadata = sqlalchemy.MetaData()
-
-                table = sqlalchemy.Table(
-                    f"{textual_db_schema}{final_table}",
-                    metadata,
-                    autoload_with=db_connection
-                )
-
-                with args.table_structure.open("a", encoding="utf-8") as f:
-                    f.write(
-                        str(
-                            sqlalchemy.schema
-                            .CreateTable(table)
-                            .compile(dialect=db_connection.dialect)
-                        )
-                        .rstrip('\n') + ';\n'
-                    )
 
         sql_script_from_cli(
             script          = args.sql_post,
@@ -834,6 +816,28 @@ def main():
             db              = db_connection,
             name            = "Post ELT script"
         )
+
+        if args.table_structure:
+            with args.table_structure.open('w', encoding="utf-8") as f:
+                for table in tables.tables:
+                    final_table = f"{args.table_prefix}{table}"
+
+                    metadata = sqlalchemy.MetaData()
+
+                    table = sqlalchemy.Table(
+                        f"{textual_db_schema}{final_table}",
+                        metadata,
+                        autoload_with=db_connection
+                    )
+
+                    f.write(
+                        str(
+                            sqlalchemy.schema
+                            .CreateTable(table)
+                            .compile(dialect=db_connection.dialect)
+                        )
+                        .rstrip('\n') + ';\n'
+                    )
 
         db_connection.commit()
 
